@@ -327,7 +327,7 @@ app.post('/api/reporte-diario', async (req, res) => {
 });
 
 // Error handling middleware
-app.use((err, req, res, _next) // eslint-disable-line no-unused-vars => {
+app.use((err, req, res, _next) => { // eslint-disable-line no-unused-vars
   logger.error('Unhandled error', { error: err.message });
   handleError(err, res);
 });

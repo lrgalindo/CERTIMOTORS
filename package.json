@@ -22,6 +22,7 @@
   "author": "Rodrigo Galindo",
   "license": "MIT",
   "dependencies": {
+    "@supabase/supabase-js": "^2.106.0",
     "axios": "^1.6.0",
     "body-parser": "^1.20.2",
     "compression": "^1.7.4",

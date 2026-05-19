@@ -1,207 +1,115 @@
-import sqlite3 from 'sqlite3';
+import { createClient } from '@supabase/supabase-js';
 import { v4 as uuidv4 } from 'uuid';
+import dotenv from 'dotenv';
 
-let db = null;
+dotenv.config();
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
 
 export async function initDB() {
-  return new Promise((resolve, reject) => {
-    const dbPath = process.env.DATABASE_PATH || './database.db';
-    db = new sqlite3.Database(dbPath, async (err) => {
-      if (err) return reject(err);
-      db.run('PRAGMA foreign_keys = ON', async (err) => {
-        if (err) return reject(err);
-        await crearTablas();
-        console.log('✅ Base de datos inicializada');
-        resolve(db);
-      });
-    });
-  });
-}
-
-function run(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
-      if (err) reject(err);
-      else resolve({ id: this.lastID, changes: this.changes });
-    });
-  });
-}
-
-function get(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
-  });
-}
-
-function all(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows || []);
-    });
-  });
-}
-
-async function crearTablas() {
-  const schemas = [
-    `CREATE TABLE IF NOT EXISTS clientes (
-      id TEXT PRIMARY KEY,
-      numero_telefono TEXT UNIQUE NOT NULL,
-      nombre TEXT,
-      tipo TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`,
-    `CREATE TABLE IF NOT EXISTS ordenes (
-      id TEXT PRIMARY KEY,
-      placa TEXT UNIQUE NOT NULL,
-      cliente_id TEXT NOT NULL,
-      tipo_auto TEXT,
-      status TEXT DEFAULT 'INICIADA',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (cliente_id) REFERENCES clientes(id)
-    )`,
-    `CREATE TABLE IF NOT EXISTS conversaciones (
-      id TEXT PRIMARY KEY,
-      placa TEXT NOT NULL,
-      cliente_id TEXT NOT NULL,
-      tipo_usuario TEXT,
-      mensaje_entrada TEXT,
-      respuesta_ia TEXT,
-      tokens_usados INTEGER,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (placa) REFERENCES ordenes(placa),
-      FOREIGN KEY (cliente_id) REFERENCES clientes(id)
-    )`,
-    `CREATE TABLE IF NOT EXISTS revisiones (
-      id TEXT PRIMARY KEY,
-      placa TEXT NOT NULL,
-      mecanico_id TEXT,
-      punto_actual INTEGER,
-      respuesta TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (placa) REFERENCES ordenes(placa)
-    )`,
-    `CREATE TABLE IF NOT EXISTS notificaciones (
-      id TEXT PRIMARY KEY,
-      placa TEXT NOT NULL,
-      tipo TEXT,
-      mensaje TEXT,
-      enviado BOOLEAN DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (placa) REFERENCES ordenes(placa)
-    )`,
-    `CREATE INDEX IF NOT EXISTS idx_ordenes_placa ON ordenes(placa)`,
-    `CREATE INDEX IF NOT EXISTS idx_ordenes_cliente ON ordenes(cliente_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_conversaciones_placa ON conversaciones(placa)`,
-    `CREATE INDEX IF NOT EXISTS idx_revisiones_placa ON revisiones(placa)`,
-  ];
-
-  for (const sql of schemas) {
-    await run(sql);
+  try {
+    const { data, error } = await supabase.from('clientes').select('id').limit(1);
+    if (error) throw new Error(`Supabase connection failed: ${error.message}`);
+    console.log('✅ Base de datos inicializada (Supabase PostgreSQL)');
+    return supabase;
+  } catch (err) {
+    console.error('❌ Database initialization error:', err.message);
+    throw err;
   }
 }
 
 export async function crearCliente(numero_telefono, data = {}) {
   const id = uuidv4();
   const { nombre = 'Cliente', tipo = 'CLIENTE' } = data;
-  await run('INSERT INTO clientes (id, numero_telefono, nombre, tipo) VALUES (?, ?, ?, ?)', [
-    id,
-    numero_telefono,
-    nombre,
-    tipo,
-  ]);
+  const { error } = await supabase.from('clientes').insert([{ id, numero_telefono, nombre, tipo }]);
+  if (error) throw new Error(`Failed to create client: ${error.message}`);
   return { id, numero_telefono, nombre, tipo };
 }
 
 export async function obtenerClientePorNumero(numero_telefono) {
-  return get('SELECT * FROM clientes WHERE numero_telefono = ?', [numero_telefono]);
+  const { data, error } = await supabase.from('clientes').select('*').eq('numero_telefono', numero_telefono).single();
+  if (error && error.code !== 'PGRST116') throw new Error(`Failed to fetch client: ${error.message}`);
+  return data || null;
 }
 
 export async function crearOrden(placa, data = {}) {
   const id = uuidv4();
   const { cliente_id, tipo_auto = 'RODADO', status = 'INICIADA' } = data;
-  await run(
-    'INSERT INTO ordenes (id, placa, cliente_id, tipo_auto, status) VALUES (?, ?, ?, ?, ?)',
-    [id, placa, cliente_id, tipo_auto, status]
-  );
+  const { error } = await supabase.from('ordenes').insert([{ id, placa, cliente_id, tipo_auto, status }]);
+  if (error) throw new Error(`Failed to create order: ${error.message}`);
   return { id, placa, cliente_id, tipo_auto, status };
 }
 
 export async function obtenerOrdenPorPlaca(placa) {
-  return get('SELECT * FROM ordenes WHERE placa = ?', [placa]);
+  const { data, error } = await supabase.from('ordenes').select('*').eq('placa', placa).single();
+  if (error && error.code !== 'PGRST116') throw new Error(`Failed to fetch order: ${error.message}`);
+  return data || null;
 }
 
 export async function obtenerConversacionesPorPlaca(placa) {
-  return all('SELECT * FROM conversaciones WHERE placa = ? ORDER BY created_at DESC LIMIT 10', [
-    placa,
-  ]);
+  const { data, error } = await supabase.from('conversaciones').select('*').eq('placa', placa).order('created_at', { ascending: false }).limit(10);
+  if (error) throw new Error(`Failed to fetch conversations: ${error.message}`);
+  return data || [];
 }
 
-export async function guardarConversacion(
-  placa,
-  cliente_id,
-  tipo_usuario,
-  mensaje_entrada,
-  respuesta_ia,
-  tokens = 0
-) {
+export async function guardarConversacion(placa, cliente_id, tipo_usuario, mensaje_entrada, respuesta_ia, tokens = 0) {
   const id = uuidv4();
-  await run(
-    `INSERT INTO conversaciones (id, placa, cliente_id, tipo_usuario, mensaje_entrada, respuesta_ia, tokens_usados)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [id, placa, cliente_id, tipo_usuario, mensaje_entrada, respuesta_ia, tokens]
-  );
+  const { error } = await supabase.from('conversaciones').insert([{ id, placa, cliente_id, tipo_usuario, mensaje_entrada, respuesta_ia, tokens_usados: tokens }]);
+  if (error) throw new Error(`Failed to save conversation: ${error.message}`);
   return { id, placa, tipo_usuario, mensaje_entrada, respuesta_ia };
 }
 
 export async function guardarRevision(placa, mecanico_id, punto_actual, respuesta) {
   const id = uuidv4();
-  await run(
-    'INSERT INTO revisiones (id, placa, mecanico_id, punto_actual, respuesta) VALUES (?, ?, ?, ?, ?)',
-    [id, placa, mecanico_id, punto_actual, respuesta]
-  );
+  const { error } = await supabase.from('revisiones').insert([{ id, placa, mecanico_id, punto_actual, respuesta }]);
+  if (error) throw new Error(`Failed to save revision: ${error.message}`);
   return { id, placa, punto_actual, respuesta };
 }
 
 export async function obtenerRevisionesPorPlaca(placa) {
-  return all('SELECT * FROM revisiones WHERE placa = ? ORDER BY punto_actual ASC', [placa]);
+  const { data, error } = await supabase.from('revisiones').select('*').eq('placa', placa).order('punto_actual', { ascending: true });
+  if (error) throw new Error(`Failed to fetch revisions: ${error.message}`);
+  return data || [];
 }
 
 export async function crearNotificacion(placa, tipo, mensaje) {
   const id = uuidv4();
-  await run('INSERT INTO notificaciones (id, placa, tipo, mensaje) VALUES (?, ?, ?, ?)', [
-    id,
-    placa,
-    tipo,
-    mensaje,
-  ]);
+  const { error } = await supabase.from('notificaciones').insert([{ id, placa, tipo, mensaje }]);
+  if (error) throw new Error(`Failed to create notification: ${error.message}`);
   return { id, placa, tipo, mensaje };
 }
 
 export async function obtenerNotificacionesPendientes() {
-  return all('SELECT * FROM notificaciones WHERE enviado = 0 ORDER BY created_at ASC');
+  const { data, error } = await supabase.from('notificaciones').select('*').eq('enviado', false).order('created_at', { ascending: true });
+  if (error) throw new Error(`Failed to fetch pending notifications: ${error.message}`);
+  return data || [];
 }
 
 export async function marcarNotificacionEnviada(id) {
-  await run('UPDATE notificaciones SET enviado = 1 WHERE id = ?', [id]);
+  const { error } = await supabase.from('notificaciones').update({ enviado: true }).eq('id', id);
+  if (error) throw new Error(`Failed to mark notification as sent: ${error.message}`);
 }
 
 export async function obtenerEstadisticas() {
-  const clientes = await get('SELECT COUNT(*) as total FROM clientes');
-  const ordenes = await get('SELECT COUNT(*) as total FROM ordenes');
-  const conversaciones = await get('SELECT COUNT(*) as total FROM conversaciones');
-  const revisiones = await get('SELECT COUNT(*) as total FROM revisiones');
-  return {
-    clientes: clientes?.total || 0,
-    ordenes: ordenes?.total || 0,
-    conversaciones: conversaciones?.total || 0,
-    revisiones: revisiones?.total || 0,
-  };
+  try {
+    const { data: estadisticas, error: estadError } = await supabase.from('estadisticas_diarias').select('*').order('fecha', { ascending: false }).limit(1);
+    if (estadError) throw estadError;
+    if (estadisticas && estadisticas.length > 0) {
+      const stats = estadisticas[0];
+      return { clientes: stats.total_clientes || 0, ordenes: stats.total_ordenes || 0, conversaciones: 0, revisiones: stats.total_puntos_inspeccionados || 0 };
+    }
+    const clientes = await supabase.from('clientes').select('COUNT(*)', { count: 'exact' });
+    const ordenes = await supabase.from('ordenes').select('COUNT(*)', { count: 'exact' });
+    const conversaciones = await supabase.from('conversaciones').select('COUNT(*)', { count: 'exact' });
+    const revisiones = await supabase.from('revisiones').select('COUNT(*)', { count: 'exact' });
+    return { clientes: clientes.count || 0, ordenes: ordenes.count || 0, conversaciones: conversaciones.count || 0, revisiones: revisiones.count || 0 };
+  } catch (err) {
+    console.error('Error fetching statistics:', err.message);
+    return { clientes: 0, ordenes: 0, conversaciones: 0, revisiones: 0 };
+  }
 }
 
-export default { initDB, crearCliente, obtenerClientePorNumero, crearOrden, obtenerOrdenPorPlaca };
+export default { initDB, crearCliente, obtenerClientePorNumero, crearOrden, obtenerOrdenPorPlaca, obtenerConversacionesPorPlaca, guardarConversacion, guardarRevision, obtenerRevisionesPorPlaca, crearNotificacion, obtenerNotificacionesPendientes, marcarNotificacionEnviada, obtenerEstadisticas };
