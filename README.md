@@ -33,3 +33,4 @@ cp .env.example .env
 # Edita .env con tus keys
 node index.js
 
+# Updated
