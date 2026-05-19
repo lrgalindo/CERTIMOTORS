@@ -1,12 +1,12 @@
 import { createClient } from '@supabase/supabase-js';
 import { v4 as uuidv4 } from 'uuid';
-import dotenv from 'dotenv';
 
-dotenv.config();
+
+
 
 const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY
+  process.env.SUPABASE_URL || 'https://iyijhruwsbyclavnoscy.supabase.co',
+  process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml5aWpocnV3c2J5Y2xhdm5vc2N5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkyMTA0MjQsImV4cCI6MjA5NDc4NjQyNH0.tRPplcR0rq09o4xzSG4INX7eZUdVxhsb6TzvrxesL_s'
 );
 
 export async function initDB() {
