@@ -7,6 +7,8 @@ CERTIMOTORS evoluciona en dos arquitecturas:
 - **Messages API** → Single turn (10 segundos max)
 - **Managed Agents** → Multi-turn (horas)
 
+---
+
 ## 📊 Timeline
 
 ### FASE 1-6: Messages API (ACTUAL)
@@ -25,59 +27,80 @@ CERTIMOTORS evoluciona en dos arquitecturas:
 - **Status:** Roadmap
 - **Scope:** UC2 + UC3 (Reportes + QA)
 - **Timeline:** 4-6 semanas
-- **Success metric:** 100% daily reports automated
+- **Success metric:** 100% daily reports automated, 0 manual QA
+
+---
 
 ## 🛠️ Implementation Plan (FASE 7)
 
 ### Sprint 1: Research & Design (Week 1-2)
-- [ ] Deep dive Managed Agents API
-- [ ] Design agent state schema
-- [ ] Design inspection checklist
-- [ ] POC con toy agent
+- [ ] Deep dive Managed Agents API documentation
+- [ ] Design agent state schema (qué datos persisten)
+- [ ] Design inspection checklist (110 puntos + validations)
+- [ ] Proof of concept con toy agent
 
 ### Sprint 2: Backend Infrastructure (Week 3-4)
-- [ ] Crear src/agents/
+- [ ] Crear `src/agents/` directory
 - [ ] Agent factory function
-- [ ] State persistence layer
-- [ ] Inspection validator
+- [ ] State persistence layer (Supabase)
+- [ ] Inspection validator (120 rules)
 
 ### Sprint 3: Integration (Week 5-6)
 - [ ] WhatsApp → Managed Agent routing
 - [ ] Telegram → Managed Agent routing
 - [ ] End-to-end testing
-- [ ] Performance testing
+- [ ] Performance testing (concurrent agents)
 
 ### Sprint 4: Polish & Launch (Week 7-8)
-- [ ] Error handling
+- [ ] Error handling & recovery
 - [ ] Analytics & monitoring
 - [ ] Documentation
-- [ ] Beta testing
-
-## 📈 Success Metrics
-
-| Métrica | Target |
-|---------|--------|
-| Inspection completion rate | 95% |
-| Avg time per inspection | 45 min |
-| Agent error rate | < 1% |
-| Customer satisfaction | 4.5/5 |
-| Uptime | 99.9% |
-
-## 💰 Cost Analysis
-
-| Item | Monthly |
-|------|---------|
-| Claude API (Agents) | $500-1000 |
-| Supabase | $100-200 |
-| Railway | $50-100 |
-| **Total** | **$650-1300** |
-
-## 📚 References
-
-- [Managed Agents API](https://docs.anthropic.com/agents)
-- [CERTIMOTORS FASE 1-6](/)
+- [ ] Beta testing con 10 usuarios
 
 ---
 
-**Owner:** Rodrigo Galindo  
+## 📈 Success Metrics
+
+| Métrica | Target | Baseline |
+|---------|--------|----------|
+| Inspection completion rate | 95% | N/A |
+| Avg time per inspection | 45 min | N/A |
+| Agent error rate | < 1% | N/A |
+| Customer satisfaction | 4.5/5 | N/A |
+| Uptime | 99.9% | 99% |
+
+---
+
+## 💰 Cost Analysis
+
+| Item | Monthly | Notes |
+|------|---------|-------|
+| Claude API (Agents) | $500-1000 | Depende volumen |
+| Supabase | $100-200 | 10GB storage |
+| Railway | $50-100 | Scaled compute |
+| **Total** | **$650-1300** | Escalable |
+
+---
+
+## 🚨 Risks & Mitigations
+
+| Risk | Impact | Mitigation |
+|------|--------|-----------|
+| Managed Agents API changes | Alto | Monitor Claude changelog monthly |
+| State corruption | Alto | Daily backups + audit logs |
+| High latency inspections | Medio | Async processing + progress indicator |
+| Cost overruns | Medio | Rate limiting + budget alerts |
+
+---
+
+## 📚 References
+
+- [Managed Agents API Documentation](https://docs.anthropic.com/agents)
+- [CERTIMOTORS FASE 1-6 Implementation](/docs/FASES.md)
+- Inspection checklist: `/specs/INSPECTION_110_POINTS.md` (TBD)
+
+---
+
+**Last updated:** May 18, 2026  
+**Owner:** Rodrigo Galindo (@lrgalindo)  
 **Status:** 🟡 In Planning
