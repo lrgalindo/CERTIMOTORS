@@ -1,0 +1,17 @@
+.env
+.env.local
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+database.db
+*.db
+.vscode/
+.idea/
+.DS_Store
+logs/
+*.log
+dist/
+build/
+.cache/
+tmp/
