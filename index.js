@@ -68,66 +68,6 @@ function extraerPlaca(texto) {
   return match ? match[0] : null;
 }
 
-// ============================================
-// Helper: Enviar mensaje por Telegram
-// ============================================
-async function enviarMensajeTelegram(chatId, texto) {
-  const token = CONFIG.TELEGRAM_BOT_TOKEN;
-  if (!token) {
-    log('WARN', '⚠️  No TELEGRAM_BOT_TOKEN');
-    return;
-  }
-
-  try {
-    const response = await axios.post(
-      `https://api.telegram.org/bot${token}/sendMessage`,
-      {
-        chat_id: chatId,
-        text: texto,
-        parse_mode: 'HTML'
-      }
-    );
-    log('INFO', `✅ Mensaje Telegram enviado a ${chatId}`);
-    return response.data;
-  } catch (error) {
-    log('ERROR', `Error enviando Telegram: ${error.message}`);
-  }
-}
-
-// ============================================
-// Setup Telegram webhook al iniciar
-// ============================================
-async function setupTelegramWebhook() {
-  const token = CONFIG.TELEGRAM_BOT_TOKEN;
-  const publicUrl = CONFIG.PUBLIC_URL;
-
-  if (!token) {
-    log('WARN', '⚠️  Skipping Telegram (no TOKEN)');
-    return;
-  }
-
-  const webhookUrl = `${publicUrl}/webhook/telegram`;
-  log('INFO', `📡 Registrando webhook Telegram: ${webhookUrl}`);
-
-  try {
-    const response = await axios.post(
-      `https://api.telegram.org/bot${token}/setWebhook`,
-      { url: webhookUrl }
-    );
-
-    if (response.data.ok) {
-      log('INFO', `✅ Webhook Telegram registrado`);
-    } else {
-      log('ERROR', `❌ Webhook error: ${response.data.description}`);
-    }
-  } catch (error) {
-    log('ERROR', `Setup Telegram error: ${error.message}`);
-  }
-}
-
-// ============================================
-// ROUTES: Health
-// ============================================
 app.get('/', (req, res) => {
   res.json({
     status: '✅ VIVO',
@@ -151,9 +91,6 @@ app.get('/metrics', async (req, res) => {
   });
 });
 
-// ============================================
-// WEBHOOK: WhatsApp
-// ============================================
 app.get('/webhook/whatsapp', (req, res) => {
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
@@ -227,9 +164,6 @@ app.post('/webhook/whatsapp', async (req, res) => {
   }
 });
 
-// ============================================
-// WEBHOOK: Telegram (NEW - Webhook automático)
-// ============================================
 app.post('/webhook/telegram', async (req, res) => {
   METRICS.totalRequests++;
   
@@ -247,11 +181,9 @@ app.post('/webhook/telegram', async (req, res) => {
 
     log('INFO', `📱 Telegram: ${userName} (${telegram_id}) → "${texto.substring(0, 50)}..."`);
 
-    // Extraer placa si está en el mensaje
     let placa = extraerPlaca(texto);
     let punto_actual = 1;
 
-    // Si hay placa, obtener la orden
     if (placa) {
       const orden = await db.obtenerOrdenPorPlaca(placa);
       if (orden) {
@@ -261,7 +193,6 @@ app.post('/webhook/telegram', async (req, res) => {
       }
     }
 
-    // Procesar con Claude (mecánico o cliente)
     const systemPrompt = placa
       ? prompts.construirSystemPromptMecanico(placa, 'RODADO', punto_actual, texto)
       : `Eres asistente de CERTIMOTORS. Responde amablemente en español.`;
@@ -270,15 +201,27 @@ app.post('/webhook/telegram', async (req, res) => {
       { role: 'user', content: texto },
     ]);
 
-    // Guardar en DB si hay placa
     if (placa) {
       await db.guardarRevision(placa, telegram_id, punto_actual, texto);
     }
 
-    // Enviar respuesta por Telegram
-    await enviarMensajeTelegram(chatId, respuesta);
+    const token = CONFIG.TELEGRAM_BOT_TOKEN;
+    if (token) {
+      try {
+        await axios.post(
+          `https://api.telegram.org/bot${token}/sendMessage`,
+          {
+            chat_id: chatId,
+            text: respuesta,
+            parse_mode: 'HTML'
+          }
+        );
+        log('INFO', `✅ Mensaje enviado a Telegram (${chatId})`);
+      } catch (error) {
+        log('ERROR', `Error enviando a Telegram: ${error.message}`);
+      }
+    }
 
-    log('INFO', `✅ Respuesta enviada a Telegram`);
     res.status(200).json({ ok: true });
 
   } catch (error) {
@@ -288,9 +231,6 @@ app.post('/webhook/telegram', async (req, res) => {
   }
 });
 
-// ============================================
-// WEBHOOK: Telegram - Mecánico (Legacy - API)
-// ============================================
 app.post('/webhook/telegram/mecanico', async (req, res) => {
   METRICS.totalRequests++;
   
@@ -330,9 +270,6 @@ app.post('/webhook/telegram/mecanico', async (req, res) => {
   }
 });
 
-// ============================================
-// WEBHOOK: Telegram - Tramitador (Legacy - API)
-// ============================================
 app.post('/webhook/telegram/tramitador', async (req, res) => {
   METRICS.totalRequests++;
   
@@ -372,9 +309,6 @@ app.post('/webhook/telegram/tramitador', async (req, res) => {
   }
 });
 
-// ============================================
-// API: Validar orden
-// ============================================
 app.post('/api/validar-orden', async (req, res) => {
   try {
     const { placa } = req.body;
@@ -411,9 +345,6 @@ app.post('/api/validar-orden', async (req, res) => {
   }
 });
 
-// ============================================
-// API: Reporte diario
-// ============================================
 app.post('/api/reporte-diario', async (req, res) => {
   try {
     const stats = await db.obtenerEstadisticas();
@@ -439,26 +370,38 @@ app.post('/api/reporte-diario', async (req, res) => {
   }
 });
 
-// ============================================
-// SERVER: Start
-// ============================================
 async function start() {
   try {
     await db.initDB();
 
-    const server = app.listen(CONFIG.PORT, async () => {
+    app.listen(CONFIG.PORT, async () => {
       log('INFO', `🚀 Backend escuchando en puerto ${CONFIG.PORT}`);
       log('INFO', `✅ CERTIMOTORS activado`);
       log('INFO', `✅ Claude API: ${CONFIG.ANTHROPIC_MODEL}`);
       log('INFO', `✅ Database: ${process.env.DATABASE_TYPE}`);
       log('INFO', `✅ Environment: ${CONFIG.NODE_ENV}`);
       log('INFO', `📍 http://localhost:${CONFIG.PORT}`);
-      log('INFO', `📱 Public URL: ${CONFIG.PUBLIC_URL}`);
-
-      // Setup Telegram webhook
-      await setupTelegramWebhook();
+      
+      if (CONFIG.TELEGRAM_BOT_TOKEN && CONFIG.PUBLIC_URL) {
+        const webhookUrl = `${CONFIG.PUBLIC_URL}/webhook/telegram`;
+        log('INFO', `📡 Registrando webhook Telegram: ${webhookUrl}`);
+        
+        try {
+          const response = await axios.post(
+            `https://api.telegram.org/bot${CONFIG.TELEGRAM_BOT_TOKEN}/setWebhook`,
+            { url: webhookUrl }
+          );
+          
+          if (response.data.ok) {
+            log('INFO', `✅ Webhook Telegram registrado`);
+          } else {
+            log('ERROR', `❌ Webhook error: ${response.data.description}`);
+          }
+        } catch (error) {
+          log('ERROR', `Setup Telegram error: ${error.message}`);
+        }
+      }
     });
-
   } catch (error) {
     log('ERROR', `Startup failed: ${error.message}`);
     process.exit(1);
