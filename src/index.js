@@ -13,6 +13,7 @@ import {
   validatePuntoActual,
 } from './validators.js';
 import rateLimit from './ratelimit.js';
+import { seleccionarModeloPorRol } from './model-router.js';
 
 const app = express();
 app.use(express.json());
@@ -22,7 +23,6 @@ app.use(rateLimit);
 const CONFIG = {
   PORT: process.env.PORT || 3000,
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-  ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL || 'claude-opus-4-20250514',
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
   PUBLIC_URL: process.env.PUBLIC_URL || 'http://localhost:3000',
@@ -35,14 +35,16 @@ const METRICS = {
   startTime: new Date(),
 };
 
-async function llamarClaudeAPI(systemPrompt, messages) {
+async function llamarClaudeAPI(systemPrompt, messages, rol) {
+  const { modelo, maxTokens } = seleccionarModeloPorRol(rol);
+
   try {
     const response = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
-        model: CONFIG.ANTHROPIC_MODEL,
-        max_tokens: 1500,
-        system: systemPrompt,
+        model: modelo,
+        max_tokens: maxTokens,
+        system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
         messages,
       },
       {
@@ -57,11 +59,11 @@ async function llamarClaudeAPI(systemPrompt, messages) {
     const texto = response.data.content[0]?.text || '';
     const tokens = response.data.usage?.output_tokens || 0;
 
-    logger.debug('Claude API response', { tokens });
+    logger.debug('Claude API response', { tokens, modelo, rol });
     return texto;
   } catch (error) {
     const errorMsg = error.response?.data?.error?.message || error.message;
-    logger.error('Claude API error', { error: errorMsg });
+    logger.error('Claude API error', { error: errorMsg, modelo, rol });
     throw new ClaudeAPIError(`Claude API: ${errorMsg}`, error);
   }
 }
@@ -78,7 +80,7 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     env: CONFIG.NODE_ENV,
     database: process.env.DATABASE_TYPE,
-    model: CONFIG.ANTHROPIC_MODEL,
+    model_router: 'activo',
     timestamp: new Date().toISOString(),
     uptime: Math.round((new Date() - METRICS.startTime) / 1000),
   });
@@ -161,9 +163,11 @@ app.post('/webhook/whatsapp', async (req, res) => {
       historialTexto
     );
 
-    const respuestaClaudeIA = await llamarClaudeAPI(systemPrompt, [
-      { role: 'user', content: textoCliente },
-    ]);
+    const respuestaClaudeIA = await llamarClaudeAPI(
+      systemPrompt,
+      [{ role: 'user', content: textoCliente }],
+      'cliente'
+    );
 
     if (placa && orden) {
       await db.guardarConversacion(placa, cliente.id, 'CLIENTE', textoCliente, respuestaClaudeIA);
@@ -216,7 +220,11 @@ app.post('/webhook/telegram', async (req, res) => {
       ? prompts.construirSystemPromptMecanico(placa, 'RODADO', punto_actual, texto)
       : 'Eres asistente de CERTIMOTORS. Responde amablemente en español.';
 
-    const respuesta = await llamarClaudeAPI(systemPrompt, [{ role: 'user', content: texto }]);
+    const respuesta = await llamarClaudeAPI(
+      systemPrompt,
+      [{ role: 'user', content: texto }],
+      'mecanico'
+    );
 
     if (placa) {
       await db.guardarRevision(placa, telegram_id, punto_actual, texto);
@@ -267,9 +275,11 @@ app.post('/webhook/telegram/mecanico', async (req, res) => {
       message
     );
 
-    const respuestaMecanico = await llamarClaudeAPI(systemPrompt, [
-      { role: 'user', content: message },
-    ]);
+    const respuestaMecanico = await llamarClaudeAPI(
+      systemPrompt,
+      [{ role: 'user', content: message }],
+      'mecanico'
+    );
 
     await db.guardarRevision(placa, telegram_id, punto_actual, message);
 
@@ -309,9 +319,11 @@ app.post('/webhook/telegram/tramitador', async (req, res) => {
       SAT: 'Pendiente',
     });
 
-    const respuestaTramitador = await llamarClaudeAPI(systemPrompt, [
-      { role: 'user', content: message },
-    ]);
+    const respuestaTramitador = await llamarClaudeAPI(
+      systemPrompt,
+      [{ role: 'user', content: message }],
+      'tramitador'
+    );
 
     logger.success('Processor response sent');
 
@@ -343,12 +355,16 @@ app.post('/api/validar-orden', async (req, res) => {
 
     const systemPrompt = prompts.construirSystemPromptValidator();
 
-    const respuestaValidator = await llamarClaudeAPI(systemPrompt, [
-      {
-        role: 'user',
-        content: `Validar orden ${placa}: ${completadas}/110 puntos completados (${porcentaje}%)`,
-      },
-    ]);
+    const respuestaValidator = await llamarClaudeAPI(
+      systemPrompt,
+      [
+        {
+          role: 'user',
+          content: `Validar orden ${placa}: ${completadas}/110 puntos completados (${porcentaje}%)`,
+        },
+      ],
+      'validator'
+    );
 
     logger.success('Order validated', { placa, porcentaje });
 
@@ -371,12 +387,16 @@ app.post('/api/reporte-diario', async (req, res) => {
     const stats = await db.obtenerEstadisticas();
 
     const systemPrompt = prompts.construirSystemPromptReporter();
-    const respuestaReporter = await llamarClaudeAPI(systemPrompt, [
-      {
-        role: 'user',
-        content: `Generar reporte: ${JSON.stringify(stats)}`,
-      },
-    ]);
+    const respuestaReporter = await llamarClaudeAPI(
+      systemPrompt,
+      [
+        {
+          role: 'user',
+          content: `Generar reporte: ${JSON.stringify(stats)}`,
+        },
+      ],
+      'reporter'
+    );
 
     logger.success('Daily report generated');
 
@@ -410,7 +430,7 @@ async function start() {
     app.listen(CONFIG.PORT, async () => {
       logger.success(`Backend listening on port ${CONFIG.PORT}`);
       logger.info('CERTIMOTORS activated', {
-        model: CONFIG.ANTHROPIC_MODEL,
+        model_router: 'activo',
         database: process.env.DATABASE_TYPE,
         environment: CONFIG.NODE_ENV,
         url: `http://localhost:${CONFIG.PORT}`,
