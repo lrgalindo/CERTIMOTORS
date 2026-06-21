@@ -8,7 +8,7 @@ const supabase = createClient(
 
 export async function initDB() {
   try {
-    const { data, error } = await supabase.from('clientes').select('id').limit(1);
+    const { error } = await supabase.from('clientes').select('id').limit(1);
     if (error) throw new Error(`Supabase connection failed: ${error.message}`);
     console.log('✅ Base de datos inicializada (Supabase PostgreSQL)');
     return supabase;
@@ -66,6 +66,78 @@ export async function obtenerOrdenPorPlaca(placa) {
   return data;
 }
 
+export async function obtenerConversacionesPorPlaca(placa) {
+  const { data, error } = await supabase
+    .from('conversaciones')
+    .select('*')
+    .eq('placa', placa)
+    .order('created_at', { ascending: false })
+    .limit(10);
+
+  if (error) throw new Error(`Error fetching conversations: ${error.message}`);
+  return data || [];
+}
+
+export async function guardarConversacion(placa, cliente_id, tipo_usuario, mensaje_entrada, respuesta_ia, tokens = 0) {
+  const id = uuidv4();
+  const { data: result, error } = await supabase
+    .from('conversaciones')
+    .insert([{ id, placa, cliente_id, tipo_usuario, mensaje_entrada, respuesta_ia, tokens_usados: tokens }])
+    .select();
+
+  if (error) throw new Error(`Error saving conversation: ${error.message}`);
+  return result[0];
+}
+
+export async function guardarRevision(placa, mecanico_id, punto_actual, respuesta) {
+  const id = uuidv4();
+  const { data: result, error } = await supabase
+    .from('revisiones')
+    .insert([{ id, placa, mecanico_id, punto_actual, respuesta }])
+    .select();
+
+  if (error) throw new Error(`Error saving revision: ${error.message}`);
+  return result[0];
+}
+
+export async function obtenerRevisionesPorPlaca(placa) {
+  const { data, error } = await supabase
+    .from('revisiones')
+    .select('*')
+    .eq('placa', placa)
+    .order('punto_actual', { ascending: true });
+
+  if (error) throw new Error(`Error fetching revisions: ${error.message}`);
+  return data || [];
+}
+
+export async function crearNotificacion(placa, tipo, mensaje) {
+  const id = uuidv4();
+  const { data: result, error } = await supabase
+    .from('notificaciones')
+    .insert([{ id, placa, tipo, mensaje }])
+    .select();
+
+  if (error) throw new Error(`Error creating notification: ${error.message}`);
+  return result[0];
+}
+
+export async function obtenerNotificacionesPendientes() {
+  const { data, error } = await supabase
+    .from('notificaciones')
+    .select('*')
+    .eq('enviado', false)
+    .order('created_at', { ascending: true });
+
+  if (error) throw new Error(`Error fetching pending notifications: ${error.message}`);
+  return data || [];
+}
+
+export async function marcarNotificacionEnviada(id) {
+  const { error } = await supabase.from('notificaciones').update({ enviado: true }).eq('id', id);
+  if (error) throw new Error(`Error marking notification as sent: ${error.message}`);
+}
+
 export async function obtenerEstadisticas() {
   const { count: clientesCount } = await supabase
     .from('clientes')
@@ -91,4 +163,18 @@ export async function obtenerEstadisticas() {
   };
 }
 
-export default { initDB, crearCliente, obtenerClientePorNumero, crearOrden, obtenerOrdenPorPlaca, obtenerEstadisticas };
+export default {
+  initDB,
+  crearCliente,
+  obtenerClientePorNumero,
+  crearOrden,
+  obtenerOrdenPorPlaca,
+  obtenerConversacionesPorPlaca,
+  guardarConversacion,
+  guardarRevision,
+  obtenerRevisionesPorPlaca,
+  crearNotificacion,
+  obtenerNotificacionesPendientes,
+  marcarNotificacionEnviada,
+  obtenerEstadisticas,
+};
