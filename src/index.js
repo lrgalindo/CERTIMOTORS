@@ -6,12 +6,7 @@ import * as db from './db.js';
 import { prompts } from './prompts.js';
 import { logger } from './logger.js';
 import { handleError, AppError, ClaudeAPIError } from './errors.js';
-import {
-  validatePlaca,
-  validatePhoneNumber,
-  validateMessage,
-  validatePuntoActual,
-} from './validators.js';
+import { validatePlaca, validatePhoneNumber, validateMessage } from './validators.js';
 import rateLimit from './ratelimit.js';
 import { seleccionarModeloPorRol } from './model-router.js';
 import { verificarPresupuesto, aplicarDegradacion, registrarLlamada } from './budget-tracker.js';
@@ -25,10 +20,25 @@ const CONFIG = {
   PORT: process.env.PORT || 3000,
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
-  TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
+  TELEGRAM_MECANICO_BOT_TOKEN: process.env.TELEGRAM_MECANICO_BOT_TOKEN,
+  TELEGRAM_TRAMITADOR_BOT_TOKEN: process.env.TELEGRAM_TRAMITADOR_BOT_TOKEN,
   PUBLIC_URL: process.env.PUBLIC_URL || 'http://localhost:3000',
   NODE_ENV: process.env.NODE_ENV || 'development',
 };
+
+async function enviarMensajeTelegram(botToken, chatId, texto) {
+  if (!botToken) return;
+  try {
+    await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      chat_id: chatId,
+      text: texto,
+      parse_mode: 'HTML',
+    });
+    logger.success(`Message sent to Telegram (${chatId})`);
+  } catch (error) {
+    logger.error('Error sending to Telegram', { error: error.message });
+  }
+}
 
 const METRICS = {
   totalRequests: 0,
@@ -203,12 +213,11 @@ app.post('/webhook/whatsapp', async (req, res) => {
   }
 });
 
-app.post('/webhook/telegram', async (req, res) => {
+app.post('/webhook/telegram/mecanico', async (req, res) => {
   METRICS.totalRequests++;
 
   try {
     const { message } = req.body;
-
     if (!message || !message.text) {
       return res.status(200).json({ ok: true });
     }
@@ -216,102 +225,57 @@ app.post('/webhook/telegram', async (req, res) => {
     const chatId = message.chat.id;
     const telegram_id = message.from.id;
     const texto = message.text;
-    const userName = message.from?.first_name || 'Usuario';
+    const userName = message.from?.first_name || 'Mecánico';
 
-    logger.info(`Telegram: ${userName} (${telegram_id})`, { text: texto.substring(0, 50) });
+    logger.info(`Mechanic: ${userName} (${telegram_id})`, { text: texto.substring(0, 50) });
 
     const placa = extraerPlaca(texto);
-    let punto_actual = 1;
-
-    if (placa) {
-      const orden = await db.obtenerOrdenPorPlaca(placa);
-      if (orden) {
-        const revisiones = await db.obtenerRevisionesPorPlaca(placa);
-        punto_actual = revisiones.length + 1;
-        logger.success(`Order found: ${placa}, point ${punto_actual}`);
-      }
+    if (!placa) {
+      await enviarMensajeTelegram(
+        CONFIG.TELEGRAM_MECANICO_BOT_TOKEN,
+        chatId,
+        '¿Cuál es la placa del vehículo que estás inspeccionando?'
+      );
+      return res.status(200).json({ ok: true });
     }
 
-    const systemPrompt = placa
-      ? prompts.construirSystemPromptMecanico(placa, 'RODADO', punto_actual, texto)
-      : 'Eres asistente de CERTIMOTORS. Responde amablemente en español.';
+    validatePlaca(placa);
+    const orden = await db.obtenerOrdenPorPlaca(placa);
+    if (!orden) {
+      await enviarMensajeTelegram(
+        CONFIG.TELEGRAM_MECANICO_BOT_TOKEN,
+        chatId,
+        `No encontré ninguna orden con placa ${placa}.`
+      );
+      return res.status(200).json({ ok: true });
+    }
 
-    const respuesta = await llamarClaudeAPI(
+    const revisiones = await db.obtenerRevisionesPorPlaca(placa);
+    const punto_actual = revisiones.length + 1;
+
+    const systemPrompt = prompts.construirSystemPromptMecanico(
+      placa,
+      orden.tipo_auto,
+      punto_actual,
+      texto
+    );
+
+    const respuestaMecanico = await llamarClaudeAPI(
       systemPrompt,
       [{ role: 'user', content: texto }],
       'mecanico',
       placa
     );
 
-    if (placa) {
-      await db.guardarRevision(placa, telegram_id, punto_actual, texto);
-    }
+    await db.guardarRevision(placa, telegram_id, punto_actual, texto);
+    await enviarMensajeTelegram(CONFIG.TELEGRAM_MECANICO_BOT_TOKEN, chatId, respuestaMecanico);
 
-    if (CONFIG.TELEGRAM_BOT_TOKEN) {
-      try {
-        await axios.post(`https://api.telegram.org/bot${CONFIG.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-          chat_id: chatId,
-          text: respuesta,
-          parse_mode: 'HTML',
-        });
-        logger.success(`Message sent to Telegram (${chatId})`);
-      } catch (error) {
-        logger.error('Error sending to Telegram', { error: error.message });
-      }
-    }
-
+    logger.success('Mechanic response sent', { placa, punto_actual });
     res.status(200).json({ ok: true });
-  } catch (error) {
-    METRICS.totalErrors++;
-    logger.error('Telegram webhook error', { error: error.message });
-    res.status(200).json({ ok: true });
-  }
-});
-
-app.post('/webhook/telegram/mecanico', async (req, res) => {
-  METRICS.totalRequests++;
-
-  try {
-    const { message, telegram_id, placa, punto_actual = 1 } = req.body;
-
-    validateMessage(message);
-    validatePlaca(placa);
-    validatePuntoActual(punto_actual);
-
-    logger.info(`Mechanic (${telegram_id}): point ${punto_actual}`, { placa });
-
-    const orden = await db.obtenerOrdenPorPlaca(placa);
-    if (!orden) {
-      throw new AppError('Orden no encontrada', 404);
-    }
-
-    const systemPrompt = prompts.construirSystemPromptMecanico(
-      placa,
-      orden.tipo_auto,
-      punto_actual,
-      message
-    );
-
-    const respuestaMecanico = await llamarClaudeAPI(
-      systemPrompt,
-      [{ role: 'user', content: message }],
-      'mecanico',
-      placa
-    );
-
-    await db.guardarRevision(placa, telegram_id, punto_actual, message);
-
-    logger.success('Mechanic response sent');
-
-    res.json({
-      status: 'ok',
-      respuesta: respuestaMecanico,
-      punto_actual: punto_actual + 1,
-    });
   } catch (error) {
     METRICS.totalErrors++;
     logger.error('Telegram mechanic error', { error: error.message });
-    handleError(error, res);
+    res.status(200).json({ ok: true });
   }
 });
 
@@ -319,19 +283,41 @@ app.post('/webhook/telegram/tramitador', async (req, res) => {
   METRICS.totalRequests++;
 
   try {
-    const { message, telegram_id, placa, etapa = 'Documentación' } = req.body;
+    const { message } = req.body;
+    if (!message || !message.text) {
+      return res.status(200).json({ ok: true });
+    }
 
-    validateMessage(message);
+    const chatId = message.chat.id;
+    const telegram_id = message.from.id;
+    const texto = message.text;
+    const userName = message.from?.first_name || 'Tramitador';
+
+    logger.info(`Processor: ${userName} (${telegram_id})`, { text: texto.substring(0, 50) });
+
+    const placa = extraerPlaca(texto);
+    if (!placa) {
+      await enviarMensajeTelegram(
+        CONFIG.TELEGRAM_TRAMITADOR_BOT_TOKEN,
+        chatId,
+        '¿Cuál es la placa del vehículo cuyo trámite estás gestionando?'
+      );
+      return res.status(200).json({ ok: true });
+    }
+
     validatePlaca(placa);
-
-    logger.info(`Processor (${telegram_id}): ${etapa}`, { placa });
-
     const orden = await db.obtenerOrdenPorPlaca(placa);
     if (!orden) {
-      throw new AppError('Orden no encontrada', 404);
+      await enviarMensajeTelegram(
+        CONFIG.TELEGRAM_TRAMITADOR_BOT_TOKEN,
+        chatId,
+        `No encontré ninguna orden con placa ${placa}.`
+      );
+      return res.status(200).json({ ok: true });
     }
 
     const cliente = await db.obtenerClientePorNumero(orden.cliente_id);
+    const etapa = orden.status;
 
     const systemPrompt = prompts.construirSystemPromptTramitador(placa, cliente, etapa, {
       SAT: 'Pendiente',
@@ -339,22 +325,19 @@ app.post('/webhook/telegram/tramitador', async (req, res) => {
 
     const respuestaTramitador = await llamarClaudeAPI(
       systemPrompt,
-      [{ role: 'user', content: message }],
+      [{ role: 'user', content: texto }],
       'tramitador',
       placa
     );
 
-    logger.success('Processor response sent');
+    await enviarMensajeTelegram(CONFIG.TELEGRAM_TRAMITADOR_BOT_TOKEN, chatId, respuestaTramitador);
 
-    res.json({
-      status: 'ok',
-      respuesta: respuestaTramitador,
-      etapa_actual: etapa,
-    });
+    logger.success('Processor response sent', { placa, etapa });
+    res.status(200).json({ ok: true });
   } catch (error) {
     METRICS.totalErrors++;
     logger.error('Telegram processor error', { error: error.message });
-    handleError(error, res);
+    res.status(200).json({ ok: true });
   }
 });
 
@@ -452,6 +435,27 @@ app.use((err, req, res, next) => {
   handleError(err, res);
 });
 
+async function registrarWebhookTelegram(botToken, rutaWebhook, nombre) {
+  if (!botToken || !CONFIG.PUBLIC_URL) return;
+
+  const webhookUrl = `${CONFIG.PUBLIC_URL}${rutaWebhook}`;
+  logger.info(`Registering ${nombre} Telegram webhook: ${webhookUrl}`);
+
+  try {
+    const response = await axios.post(`https://api.telegram.org/bot${botToken}/setWebhook`, {
+      url: webhookUrl,
+    });
+
+    if (response.data.ok) {
+      logger.success(`${nombre} Telegram webhook registered`);
+    } else {
+      logger.error(`${nombre} webhook registration error`, { error: response.data.description });
+    }
+  } catch (error) {
+    logger.error(`${nombre} Telegram setup error`, { error: error.message });
+  }
+}
+
 async function start() {
   try {
     await db.initDB();
@@ -465,24 +469,20 @@ async function start() {
         url: `http://localhost:${CONFIG.PORT}`,
       });
 
-      if (CONFIG.TELEGRAM_BOT_TOKEN && CONFIG.PUBLIC_URL) {
-        const webhookUrl = `${CONFIG.PUBLIC_URL}/webhook/telegram`;
-        logger.info(`Registering Telegram webhook: ${webhookUrl}`);
-
-        try {
-          const response = await axios.post(
-            `https://api.telegram.org/bot${CONFIG.TELEGRAM_BOT_TOKEN}/setWebhook`,
-            { url: webhookUrl }
-          );
-
-          if (response.data.ok) {
-            logger.success('Telegram webhook registered');
-          } else {
-            logger.error('Webhook registration error', { error: response.data.description });
-          }
-        } catch (error) {
-          logger.error('Telegram setup error', { error: error.message });
-        }
+      // El registro automático contra Telegram solo corre si se confirma explícitamente
+      // vía esta env var — evita reapuntar webhooks de producción en cada deploy/restart
+      // sin confirmación (checkpoint: Tarea 3.2).
+      if (process.env.TELEGRAM_AUTO_REGISTER_WEBHOOK === 'true') {
+        await registrarWebhookTelegram(
+          CONFIG.TELEGRAM_MECANICO_BOT_TOKEN,
+          '/webhook/telegram/mecanico',
+          'Mecánico'
+        );
+        await registrarWebhookTelegram(
+          CONFIG.TELEGRAM_TRAMITADOR_BOT_TOKEN,
+          '/webhook/telegram/tramitador',
+          'Tramitador'
+        );
       }
     });
   } catch (error) {
