@@ -138,6 +138,38 @@ export async function marcarNotificacionEnviada(id) {
   if (error) throw new Error(`Error marking notification as sent: ${error.message}`);
 }
 
+export async function registrarCostoAPI({ rol, modelo, tipoTarea, tokensInput, tokensOutput, tokensCacheCreation = 0, tokensCacheRead = 0, costoUsd, placa = null }) {
+  const id = uuidv4();
+  const { data: result, error } = await supabase
+    .from('costos_api')
+    .insert([{
+      id,
+      rol,
+      modelo,
+      tipo_tarea: tipoTarea,
+      tokens_input: tokensInput,
+      tokens_output: tokensOutput,
+      tokens_cache_creation: tokensCacheCreation,
+      tokens_cache_read: tokensCacheRead,
+      costo_estimado_usd: costoUsd,
+      placa,
+    }])
+    .select();
+
+  if (error) throw new Error(`Error logging API cost: ${error.message}`);
+  return result[0];
+}
+
+export async function obtenerGastoDesde(fechaISO) {
+  const { data, error } = await supabase
+    .from('costos_api')
+    .select('costo_estimado_usd, rol')
+    .gte('created_at', fechaISO);
+
+  if (error) throw new Error(`Error fetching spend: ${error.message}`);
+  return data || [];
+}
+
 export async function obtenerEstadisticas() {
   const { count: clientesCount } = await supabase
     .from('clientes')
@@ -176,5 +208,7 @@ export default {
   crearNotificacion,
   obtenerNotificacionesPendientes,
   marcarNotificacionEnviada,
+  registrarCostoAPI,
+  obtenerGastoDesde,
   obtenerEstadisticas,
 };

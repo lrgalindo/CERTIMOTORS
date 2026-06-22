@@ -14,10 +14,18 @@ export const ROLE_TASK_TYPE = {
 };
 
 const MODEL_BY_TASK_TYPE = {
-  [TASK_TYPES.CLASIFICACION]: 'claude-haiku-4-5-20251001',
+  [TASK_TYPES.CLASIFICACION]: 'claude-haiku-4-5',
   [TASK_TYPES.CONVERSACION]: 'claude-sonnet-4-6',
   [TASK_TYPES.EXTRACCION]: 'claude-sonnet-4-6',
   [TASK_TYPES.RAZONAMIENTO_PROFUNDO]: 'claude-opus-4-8',
+};
+
+// USD por millón de tokens. Cache write: 1.25x (TTL 5m) / 2x (TTL 1h) del precio de input.
+// Cache read: ~0.1x del precio de input. Verificado contra la documentación vigente de Anthropic.
+export const PRICING_USD_PER_MTOK = {
+  'claude-haiku-4-5': { input: 1.0, output: 5.0, cacheWrite5m: 1.25, cacheWrite1h: 2.0, cacheRead: 0.1 },
+  'claude-sonnet-4-6': { input: 3.0, output: 15.0, cacheWrite5m: 3.75, cacheWrite1h: 6.0, cacheRead: 0.3 },
+  'claude-opus-4-8': { input: 5.0, output: 25.0, cacheWrite5m: 6.25, cacheWrite1h: 10.0, cacheRead: 0.5 },
 };
 
 const MAX_TOKENS_BY_TASK_TYPE = {

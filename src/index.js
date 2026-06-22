@@ -14,6 +14,7 @@ import {
 } from './validators.js';
 import rateLimit from './ratelimit.js';
 import { seleccionarModeloPorRol } from './model-router.js';
+import { verificarPresupuesto, aplicarDegradacion, registrarLlamada } from './budget-tracker.js';
 
 const app = express();
 app.use(express.json());
@@ -35,8 +36,21 @@ const METRICS = {
   startTime: new Date(),
 };
 
-async function llamarClaudeAPI(systemPrompt, messages, rol) {
-  const { modelo, maxTokens } = seleccionarModeloPorRol(rol);
+async function llamarClaudeAPI(systemPrompt, messages, rol, placa = null) {
+  const presupuesto = await verificarPresupuesto(db);
+  if (presupuesto.nivel === 'bloqueado') {
+    logger.error('Presupuesto mensual agotado', presupuesto);
+    throw new AppError(
+      `Presupuesto mensual de Claude agotado ($${presupuesto.limite} USD, gasto actual $${presupuesto.gastoMensual.toFixed(2)}). Intenta más tarde.`,
+      402
+    );
+  }
+
+  const { modelo: modeloBase, maxTokens, tipoTarea } = seleccionarModeloPorRol(rol);
+  const modelo = aplicarDegradacion(modeloBase, presupuesto.nivel);
+  if (modelo !== modeloBase) {
+    logger.warn('Modelo degradado por presupuesto', { rol, modeloBase, modelo, porcentaje: presupuesto.porcentaje });
+  }
 
   try {
     const response = await axios.post(
@@ -57,9 +71,10 @@ async function llamarClaudeAPI(systemPrompt, messages, rol) {
     );
 
     const texto = response.data.content[0]?.text || '';
-    const tokens = response.data.usage?.output_tokens || 0;
+    const usage = response.data.usage || {};
 
-    logger.debug('Claude API response', { tokens, modelo, rol });
+    const costoUsd = await registrarLlamada(db, { rol, modelo, tipoTarea, usage, placa });
+    logger.debug('Claude API response', { tokens: usage.output_tokens, modelo, rol, costoUsd });
     return texto;
   } catch (error) {
     const errorMsg = error.response?.data?.error?.message || error.message;
@@ -166,7 +181,8 @@ app.post('/webhook/whatsapp', async (req, res) => {
     const respuestaClaudeIA = await llamarClaudeAPI(
       systemPrompt,
       [{ role: 'user', content: textoCliente }],
-      'cliente'
+      'cliente',
+      placa
     );
 
     if (placa && orden) {
@@ -223,7 +239,8 @@ app.post('/webhook/telegram', async (req, res) => {
     const respuesta = await llamarClaudeAPI(
       systemPrompt,
       [{ role: 'user', content: texto }],
-      'mecanico'
+      'mecanico',
+      placa
     );
 
     if (placa) {
@@ -278,7 +295,8 @@ app.post('/webhook/telegram/mecanico', async (req, res) => {
     const respuestaMecanico = await llamarClaudeAPI(
       systemPrompt,
       [{ role: 'user', content: message }],
-      'mecanico'
+      'mecanico',
+      placa
     );
 
     await db.guardarRevision(placa, telegram_id, punto_actual, message);
@@ -322,7 +340,8 @@ app.post('/webhook/telegram/tramitador', async (req, res) => {
     const respuestaTramitador = await llamarClaudeAPI(
       systemPrompt,
       [{ role: 'user', content: message }],
-      'tramitador'
+      'tramitador',
+      placa
     );
 
     logger.success('Processor response sent');
@@ -363,7 +382,8 @@ app.post('/api/validar-orden', async (req, res) => {
           content: `Validar orden ${placa}: ${completadas}/110 puntos completados (${porcentaje}%)`,
         },
       ],
-      'validator'
+      'validator',
+      placa
     );
 
     logger.success('Order validated', { placa, porcentaje });
@@ -385,6 +405,15 @@ app.post('/api/validar-orden', async (req, res) => {
 app.post('/api/reporte-diario', async (req, res) => {
   try {
     const stats = await db.obtenerEstadisticas();
+    const presupuesto = await verificarPresupuesto(db);
+
+    const statsConCosto = {
+      ...stats,
+      gasto_mensual_usd: Number(presupuesto.gastoMensual.toFixed(2)),
+      presupuesto_limite_usd: presupuesto.limite,
+      presupuesto_porcentaje: Math.round(presupuesto.porcentaje * 100),
+      presupuesto_nivel: presupuesto.nivel,
+    };
 
     const systemPrompt = prompts.construirSystemPromptReporter();
     const respuestaReporter = await llamarClaudeAPI(
@@ -392,7 +421,7 @@ app.post('/api/reporte-diario', async (req, res) => {
       [
         {
           role: 'user',
-          content: `Generar reporte: ${JSON.stringify(stats)}`,
+          content: `Generar reporte: ${JSON.stringify(statsConCosto)}`,
         },
       ],
       'reporter'
@@ -403,7 +432,7 @@ app.post('/api/reporte-diario', async (req, res) => {
     res.json({
       status: 'ok',
       timestamp: new Date().toISOString(),
-      estadisticas: stats,
+      estadisticas: statsConCosto,
       reporte: respuestaReporter,
     });
   } catch (error) {

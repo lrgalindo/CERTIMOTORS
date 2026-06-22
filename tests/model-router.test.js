@@ -8,7 +8,7 @@ import {
 } from '../src/model-router.js';
 
 test('clasificación usa el modelo más económico (Haiku)', () => {
-  assert.equal(seleccionarModelo(TASK_TYPES.CLASIFICACION), 'claude-haiku-4-5-20251001');
+  assert.equal(seleccionarModelo(TASK_TYPES.CLASIFICACION), 'claude-haiku-4-5');
 });
 
 test('conversación y extracción usan Sonnet por default', () => {
