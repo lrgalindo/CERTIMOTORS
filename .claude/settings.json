@@ -1,0 +1,48 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install)",
+      "Bash(npm run:*)",
+      "Bash(npm test:*)",
+      "Bash(node /tmp/*.js)",
+      "Bash(node src/index.js:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git branch:*)",
+      "Bash(cat:*)",
+      "Bash(grep:*)",
+      "Read",
+      "Edit(src/**)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "Bash(git checkout:*)",
+      "Bash(git merge:*)",
+      "Bash(git rebase:*)",
+      "Bash(npm publish:*)",
+      "Bash(npm uninstall:*)",
+      "Edit(.env*)",
+      "Edit(migrations/**)",
+      "Edit(package.json)",
+      "Edit(package-lock.json)"
+    ],
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(rm -r:*)",
+      "Bash(sudo:*)",
+      "Bash(chmod 777:*)",
+      "Bash(git push --force:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(curl* | sh)",
+      "Bash(curl* | bash)",
+      "Read(.env*)",
+      "Read(**/secrets/**)",
+      "Read(**/*.pem)",
+      "Read(**/.ssh/**)",
+      "Edit(.git/**)"
+    ],
+    "defaultMode": "default"
+  }
+}
