@@ -16,3 +16,4 @@ dist/
 build/
 .cache/
 tmp/
+.claude/settings.local.json
