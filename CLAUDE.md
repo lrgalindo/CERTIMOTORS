@@ -48,7 +48,6 @@ src/
   errors.js           AppError / ClaudeAPIError + handler de errores HTTP
   logger.js           Logger mínimo sobre console.*
   ratelimit.js         Rate limiter usado realmente por index.js (100 req/15min)
-  middleware.js       Rate limiter + healthEndpoint + requestLogger — código MUERTO, no se importa desde index.js (ver sección 10)
 ```
 
 ## 3. Módulos principales — responsabilidad real
@@ -148,7 +147,7 @@ Todas las llamadas usan `cache_control: { type: 'ephemeral' }` en el system prom
 | `SUPABASE_URL` | db.js | URL del proyecto Supabase |
 | `SUPABASE_KEY` | db.js | Debe ser la `service_role` key (RLS sin políticas en varias tablas) |
 | `PORT` | index.js | Default `3000` |
-| `NODE_ENV` | index.js, middleware.js | Default `development` |
+| `NODE_ENV` | index.js | Default `development` |
 | `PUBLIC_URL` | index.js | Default `http://localhost:3000`, usado para registrar webhooks de Telegram |
 | `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | index.js | Verify token del challenge de Meta (`GET /webhook/whatsapp`) |
 | `WHATSAPP_APP_SECRET` | index.js, webhook-security.js | HMAC para verificar `X-Hub-Signature-256`; si falta, se deja pasar sin verificar (con warning único) |
@@ -178,8 +177,7 @@ Cobertura real de `tests/` (8 archivos, 59 tests): `budget-tracker`, `claude-cli
 
 ## 10. Pendientes conocidos
 
-- **WhatsApp saliente no implementado**: `procesarWhatsapp` genera la respuesta de Claude y la guarda en `conversaciones`, pero nunca la envía de vuelta al cliente (no hay integración con la Graph API de Meta para enviar mensajes, solo se recibe). Hay un `logger.warn` explícito en el código marcando este gap.
-- **`src/middleware.js` es código muerto**: define `apiLimiter`, `healthEndpoint` y `requestLogger`, pero `index.js` importa `ratelimit.js` (un archivo distinto y más simple) — `middleware.js` no se importa desde ningún lugar. Limpiar o consolidar.
+- **🔴 CRÍTICO — próximo feature a implementar: WhatsApp saliente no implementado**: `procesarWhatsapp` genera la respuesta de Claude y la guarda en `conversaciones`, pero nunca la envía de vuelta al cliente (no hay integración con la Graph API de Meta para enviar mensajes, solo se recibe). Hay un `logger.warn` explícito en el código marcando este gap. **Sin esto el flujo de ventas está incompleto**: el cliente escribe por WhatsApp, el sistema procesa y genera una respuesta con Claude, pero esa respuesta nunca llega — el cliente nunca recibe contestación. Esto bloquea cualquier uso real del canal de ventas/atención por WhatsApp y debe priorizarse antes de cualquier otro feature de cara al cliente.
 - **`migrations/004_certificado_pdf.sql` no aplicado en producción**: pendiente de ejecutar manualmente en el SQL Editor de Supabase (sin credenciales en este sandbox).
 - **Bucket `certificados` en Supabase Storage no garantizado**: `asegurarBucketCertificados()` lo crea de forma idempotente en el primer certificado generado, pero si falla (por ejemplo por permisos), el sistema cae a guardar el PDF en `/tmp` del proceso — que no persiste entre despliegues/reinicios. Se recomienda crear el bucket manualmente con `scripts/crear-bucket-certificados.js` antes de ir a producción.
 - **No hay test automatizado de `pdf-generator.js`**: cualquier cambio al PDF debe verificarse manualmente (ver smoke tests usados durante la sesión de rediseño, no commiteados como suite formal).
