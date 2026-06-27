@@ -156,6 +156,60 @@ export async function crearNotificacion(placa, tipo, mensaje) {
   return result[0];
 }
 
+export async function actualizarDatosOrden(placa, datos) {
+  const { error } = await supabase
+    .from('ordenes')
+    .update({ ...datos, updated_at: new Date().toISOString() })
+    .eq('placa', placa);
+
+  if (error) throw new Error(`Error actualizando datos de orden: ${error.message}`);
+}
+
+export async function guardarCertificado(placa, url) {
+  const { error } = await supabase
+    .from('ordenes')
+    .update({ certificado_url: url, certificado_generado_at: new Date().toISOString() })
+    .eq('placa', placa);
+
+  if (error) throw new Error(`Error guardando certificado: ${error.message}`);
+}
+
+export async function obtenerNotificacionesPorPlacaYTipos(placa, tipos) {
+  const { data, error } = await supabase
+    .from('notificaciones')
+    .select('*')
+    .eq('placa', placa)
+    .in('tipo', tipos)
+    .order('created_at', { ascending: false });
+
+  if (error) throw new Error(`Error fetching notifications by tipos: ${error.message}`);
+  return data || [];
+}
+
+// Crea el bucket público "certificados" si no existe todavía. Idempotente:
+// se puede llamar en cada arranque sin riesgo de duplicar el bucket.
+export async function asegurarBucketCertificados() {
+  const { data: buckets, error } = await supabase.storage.listBuckets();
+  if (error) throw new Error(`Error listando buckets de Storage: ${error.message}`);
+
+  const existe = (buckets || []).some((b) => b.name === 'certificados');
+  if (existe) return;
+
+  const { error: createError } = await supabase.storage.createBucket('certificados', { public: true });
+  if (createError) throw new Error(`Error creando bucket certificados: ${createError.message}`);
+}
+
+export async function subirCertificado(nombreArchivo, buffer) {
+  const { error } = await supabase.storage.from('certificados').upload(nombreArchivo, buffer, {
+    contentType: 'application/pdf',
+    upsert: true,
+  });
+  if (error) throw new Error(`Error subiendo certificado a Storage: ${error.message}`);
+
+  const { data } = supabase.storage.from('certificados').getPublicUrl(nombreArchivo);
+  return data.publicUrl;
+}
+
 export async function obtenerNotificacionesPorPlaca(placa) {
   const { data, error } = await supabase
     .from('notificaciones')
@@ -295,6 +349,8 @@ export default {
   crearOrden,
   obtenerOrdenPorPlaca,
   actualizarStatusOrden,
+  actualizarDatosOrden,
+  guardarCertificado,
   obtenerConversacionesPorPlaca,
   guardarConversacion,
   guardarRevision,
@@ -302,6 +358,9 @@ export default {
   obtenerUltimaPlacaPorMecanico,
   crearNotificacion,
   obtenerNotificacionesPorPlaca,
+  obtenerNotificacionesPorPlacaYTipos,
+  asegurarBucketCertificados,
+  subirCertificado,
   obtenerNotificacionesPendientes,
   marcarNotificacionEnviada,
   registrarCostoAPI,

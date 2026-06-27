@@ -58,12 +58,21 @@ function crearDbFake(overrides = {}) {
     actualizarStatusOrden: async (placa, status) => {
       ordenes[placa] = { ...ordenes[placa], status };
     },
+    actualizarDatosOrden: async (placa, datos) => {
+      ordenes[placa] = { ...ordenes[placa], ...datos };
+    },
+    guardarCertificado: async (placa, url) => {
+      ordenes[placa] = { ...ordenes[placa], certificado_url: url };
+    },
+    asegurarBucketCertificados: async () => {},
+    subirCertificado: async () => 'https://fake-storage/certificados/fake.pdf',
     crearNotificacion: async (placa, tipo, mensaje) => {
       const fila = { placa, tipo, mensaje };
       notificaciones.push(fila);
       return fila;
     },
     obtenerNotificacionesPorPlaca: async (placa) => notificaciones.filter((n) => n.placa === placa),
+    obtenerNotificacionesPorPlacaYTipos: async (placa, tipos) => notificaciones.filter((n) => n.placa === placa && tipos.includes(n.tipo)),
     obtenerClientePorId: async () => ({ nombre: 'Juan Pérez' }),
     obtenerClientePorNumero: async (numero) => clientes[numero] || null,
     crearCliente: async (numero, data = {}) => {
@@ -191,8 +200,10 @@ test('procesarTelegramMecanico: inspeccion_completa marca la orden y notifica', 
   await procesarTelegramMecanico(db, mensajeTelegram('placa P926FTB ya terminé toda la inspección'), undefined, 'fake-key');
 
   assert.equal(db._ordenes.P926FTB.status, 'INSPECCION_COMPLETA');
-  assert.equal(db._notificaciones.length, 1);
-  assert.equal(db._notificaciones[0].tipo, 'INSPECCION_COMPLETA');
+  assert.equal(db._ordenes.P926FTB.inspector_nombre, 'Beto');
+  const tipos = db._notificaciones.map((n) => n.tipo);
+  assert.ok(tipos.includes('INSPECCION_COMPLETA'));
+  assert.ok(tipos.includes('CERTIFICADO_GENERADO'));
 
   server.close();
   delete process.env.ANTHROPIC_API_URL;
@@ -202,8 +213,8 @@ test('procesarTelegramTramitador: registra actualizaciones de varias áreas', as
   const { server, url } = await crearServidorClaudeFake(() =>
     toolUseResponse('registrar_avance_tramite', {
       actualizaciones: [
-        { area: 'DOCUMENTOS', estado: 'COMPLETADO' },
-        { area: 'PAGO', estado: 'EN_PROCESO', detalle: 'Esperando transferencia' },
+        { area: 'IMPUESTO_CIRCULACION', estado: 'SOLVENTE' },
+        { area: 'CALCOMANIA', estado: 'VENCIDA', detalle: 'Vencida desde marzo' },
       ],
       tramite_completo: false,
       respuesta_tramitador: 'Anotado.',
@@ -212,23 +223,28 @@ test('procesarTelegramTramitador: registra actualizaciones de varias áreas', as
   process.env.ANTHROPIC_API_URL = url;
 
   const db = crearDbFake();
-  await procesarTelegramTramitador(db, mensajeTelegram('placa P926FTB documentos completos, pago en proceso esperando transferencia'), undefined, 'fake-key');
+  await procesarTelegramTramitador(
+    db,
+    mensajeTelegram('placa P926FTB impuesto solvente, calcomanía vencida desde marzo'),
+    undefined,
+    'fake-key'
+  );
 
   assert.equal(db._notificaciones.length, 2);
-  assert.deepEqual(db._notificaciones[0], { placa: 'P926FTB', tipo: 'DOCUMENTOS', mensaje: 'COMPLETADO' });
-  assert.deepEqual(db._notificaciones[1], { placa: 'P926FTB', tipo: 'PAGO', mensaje: 'EN_PROCESO: Esperando transferencia' });
+  assert.deepEqual(db._notificaciones[0], { placa: 'P926FTB', tipo: 'IMPUESTO_CIRCULACION', mensaje: 'SOLVENTE' });
+  assert.deepEqual(db._notificaciones[1], { placa: 'P926FTB', tipo: 'CALCOMANIA', mensaje: 'VENCIDA: Vencida desde marzo' });
 
   server.close();
   delete process.env.ANTHROPIC_API_URL;
 });
 
-test('procesarTelegramTramitador: tramite_completo cierra la orden y dispara validación', async () => {
+test('procesarTelegramTramitador: tramite_completo cierra la orden y dispara validación + certificado', async () => {
   const { server, url } = await crearServidorClaudeFake((body) => {
     if (body.tools) {
       return toolUseResponse('registrar_avance_tramite', {
-        actualizaciones: [{ area: 'CERTIFICADO', estado: 'COMPLETADO' }],
+        actualizaciones: [{ area: 'GRAVAMENES', estado: 'SIN_GRAVAMENES' }],
         tramite_completo: true,
-        respuesta_tramitador: 'Listo, certificado entregado.',
+        respuesta_tramitador: 'Listo, todo limpio.',
       });
     }
     return { content: [{ type: 'text', text: '✅ APROBADO PARA CERTIFICADO' }], usage: { input_tokens: 30, output_tokens: 10 } };
@@ -236,12 +252,13 @@ test('procesarTelegramTramitador: tramite_completo cierra la orden y dispara val
   process.env.ANTHROPIC_API_URL = url;
 
   const db = crearDbFake();
-  await procesarTelegramTramitador(db, mensajeTelegram('placa P926FTB certificado entregado, trámite terminado'), undefined, 'fake-key');
+  await procesarTelegramTramitador(db, mensajeTelegram('placa P926FTB sin gravámenes, trámite terminado'), undefined, 'fake-key');
 
   assert.equal(db._ordenes.P926FTB.status, 'TRAMITE_COMPLETO');
   const tipos = db._notificaciones.map((n) => n.tipo);
   assert.ok(tipos.includes('TRAMITE_COMPLETO'));
   assert.ok(tipos.includes('CERTIFICADO_VALIDACION'));
+  assert.ok(tipos.includes('CERTIFICADO_GENERADO'));
   const validacion = db._notificaciones.find((n) => n.tipo === 'CERTIFICADO_VALIDACION');
   assert.equal(validacion.mensaje, '✅ APROBADO PARA CERTIFICADO');
 

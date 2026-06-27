@@ -81,6 +81,14 @@ Supabase, en orden:
 1. `init.sql` — esquema base (clientes, ordenes, conversaciones, revisiones, notificaciones)
 2. `002_costos_api.sql` — tracking de costos de Claude
 3. `003_cola_jobs.sql` — cola de jobs para el patrón ack-then-process
+4. `004_certificado_pdf.sql` — datos del vehículo/inspector y referencia al PDF en `ordenes`
+
+El certificado PDF se sube al bucket público `certificados` de Supabase
+Storage (con fallback a `/tmp` si no está configurado). Crearlo una sola vez:
+
+```bash
+SUPABASE_URL=... SUPABASE_KEY=... node scripts/crear-bucket-certificados.js
+```
 
 ## Tests
 
