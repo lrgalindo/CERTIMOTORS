@@ -5,10 +5,21 @@ import { llamarClaudeAPI, llamarClaudeConTool } from './claude-client.js';
 import { enviarMensajeTelegram } from './telegram-client.js';
 import { TOOL_REGISTRAR_INSPECCION, TOOL_REGISTRAR_AVANCE_TRAMITE } from './tools.js';
 import { validarOrden } from './validar-orden.js';
+import { generarCertificado } from './pdf-generator.js';
 
 const ESTADOS_HALLAZGO = ['BIEN', 'REGULAR', 'MAL'];
-const AREAS_TRAMITE = ['DOCUMENTOS', 'PAGO', 'SAT', 'MUNICIPIO', 'CERTIFICADO', 'OTRO'];
-const ESTADOS_TRAMITE = ['PENDIENTE', 'EN_PROCESO', 'COMPLETADO', 'RECHAZADO'];
+const AREAS_TRAMITE = ['IMPUESTO_CIRCULACION', 'CALCOMANIA', 'MULTAS', 'GRAVAMENES'];
+const ESTADOS_TRAMITE = [
+  'SOLVENTE',
+  'PENDIENTE',
+  'VIGENTE',
+  'VENCIDA',
+  'SIN_MULTAS',
+  'CON_MULTAS',
+  'SIN_GRAVAMENES',
+  'CON_GRAVAMENES',
+  'NO_VERIFICADO',
+];
 
 export function extraerPlaca(texto) {
   const match = texto.match(/[A-Z]\d{3}[A-Z]{3}/);
@@ -144,8 +155,18 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
   }
 
   if (inspeccionCompleta) {
+    await db.actualizarDatosOrden(placa, { inspector_nombre: userName });
     await db.actualizarStatusOrden(placa, 'INSPECCION_COMPLETA');
     await db.crearNotificacion(placa, 'INSPECCION_COMPLETA', `Inspección completada por ${userName}`);
+
+    if (orden.servicio !== 'FULL') {
+      try {
+        const { url } = await generarCertificado(placa, db);
+        await db.crearNotificacion(placa, 'CERTIFICADO_GENERADO', `Certificado generado: ${url}`);
+      } catch (error) {
+        logger.error('Error generando certificado (servicio estándar)', { placa, error: error.message });
+      }
+    }
   }
 
   await enviarMensajeTelegram(botToken, chatId, respuesta);
@@ -217,6 +238,12 @@ export async function procesarTelegramTramitador(db, payload, botToken, apiKey) 
       await db.crearNotificacion(placa, 'CERTIFICADO_VALIDACION', validacion);
     } catch (error) {
       logger.error('Error disparando validación de certificado', { placa, error: error.message });
+    }
+    try {
+      const { url } = await generarCertificado(placa, db);
+      await db.crearNotificacion(placa, 'CERTIFICADO_GENERADO', `Certificado generado: ${url}`);
+    } catch (error) {
+      logger.error('Error generando certificado (servicio full)', { placa, error: error.message });
     }
   }
 
