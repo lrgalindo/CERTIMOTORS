@@ -20,6 +20,19 @@ const AREA_LABELS = {
   GRAVAMENES: 'Gravámenes de garantías mobiliarias',
 };
 
+// El cliente nunca debe ver los enums internos (SIN_MULTAS, NO_VERIFICADO, etc.)
+const ESTADO_LABELS = {
+  SOLVENTE: 'Solvente',
+  PENDIENTE: 'Pendiente',
+  VIGENTE: 'Vigente',
+  VENCIDA: 'Vencida',
+  SIN_MULTAS: 'Sin multas',
+  CON_MULTAS: 'Con multas',
+  SIN_GRAVAMENES: 'Sin gravámenes',
+  CON_GRAVAMENES: 'Con gravámenes',
+  NO_VERIFICADO: 'No verificado',
+};
+
 const CATEGORIA_LABELS = {
   MOTOR_TRANSMISION: 'Motor y transmisión',
   FRENOS_SUSPENSION: 'Frenos y suspensión',
@@ -82,9 +95,13 @@ function construirVerificaciones(notificaciones) {
   return AREAS_ADMIN.map((area) => porArea.get(area) || { area, estado: 'NO_VERIFICADO', detalle: null });
 }
 
+// 3+ hallazgos MAL simultáneos se considera una condición de seguridad que
+// impide circular (no un punto crítico aislado) y amerita NO APROBADO.
+const UMBRAL_NO_APROBADO_CRITICOS = 3;
+
 function calcularVeredicto(criticos, observaciones) {
-  if (criticos > 0) return { texto: 'NO APROBADO', color: COLOR.MAL };
-  if (observaciones > 0) return { texto: 'APROBADO CON OBSERVACIONES', color: COLOR.REGULAR };
+  if (criticos >= UMBRAL_NO_APROBADO_CRITICOS) return { texto: 'NO APROBADO', color: COLOR.MAL };
+  if (criticos > 0 || observaciones > 0) return { texto: 'APROBADO CON OBSERVACIONES', color: COLOR.REGULAR };
   return { texto: 'APROBADO', color: COLOR.BIEN };
 }
 
@@ -96,7 +113,12 @@ function dibujarBadge(doc, x, y, texto, color, { fontSize = 10, paddingX = 8, pa
   const xFinal = centerIn !== undefined ? centerIn - width / 2 : x;
   doc.save().roundedRect(xFinal, y, width, height, 4).fill(color).restore();
   doc.fillColor('#FFFFFF').text(texto, xFinal + paddingX, y + paddingY - 1);
+  // .text() con x/y explícitos deja doc.x en esa posición; sin restaurarlo al
+  // margen, el siguiente texto fluido hereda ese x y se desborda fuera de la
+  // página (se ve "cortado" aunque pdfkit no aplique elipsis).
   doc.fillColor('#000000').font('Helvetica').fontSize(10);
+  doc.x = doc.page.margins.left;
+  doc.y = y + height;
   return { x: xFinal, width, height };
 }
 
@@ -169,8 +191,9 @@ function dibujarTablaVehiculo(doc, { orden, placa, codigoCertificado }) {
 function dibujarVeredicto(doc, { veredicto, veredictoBadge }) {
   const centro = doc.page.width / 2;
   dibujarBadge(doc, 0, doc.y, `VEREDICTO: ${veredictoBadge.texto}`, veredictoBadge.color, { fontSize: 13, paddingX: 14, paddingY: 7, centerIn: centro });
-  doc.moveDown(2.2);
+  doc.moveDown(0.8);
 
+  // Sin width fijo de altura: pdfkit ajusta el alto del bloque al contenido real.
   doc.fontSize(10).font('Helvetica').fillColor('#222222').text(veredicto || 'Sin información suficiente para emitir un veredicto.', {
     width: doc.page.width - doc.page.margins.left - doc.page.margins.right,
   });
@@ -283,7 +306,7 @@ function dibujarPagina2(doc, { placa, codigoCertificado, verificaciones, veredic
   const todasLimpias = verificaciones.every((v) => ESTADOS_LIMPIOS.includes(v.estado));
   const badgeAdmin = todasLimpias ? { texto: 'APTO PARA TRASPASO', color: COLOR.BIEN } : { texto: 'CON IMPEDIMENTOS', color: COLOR.MAL };
   dibujarBadge(doc, doc.page.margins.left, doc.y, badgeAdmin.texto, badgeAdmin.color, { fontSize: 11, paddingX: 12, paddingY: 6 });
-  doc.moveDown(2);
+  doc.moveDown(1.2);
 
   doc.table({
     data: [
@@ -292,7 +315,7 @@ function dibujarPagina2(doc, { placa, codigoCertificado, verificaciones, veredic
         AREA_LABELS[v.area],
         v.detalle || '—',
         {
-          text: v.estado,
+          text: ESTADO_LABELS[v.estado] || v.estado,
           textColor: ESTADOS_LIMPIOS.includes(v.estado) ? COLOR.BIEN : v.estado === 'NO_VERIFICADO' ? COLOR.GRIS_TEXTO : COLOR.MAL,
           font: { family: 'Helvetica-Bold' },
         },
@@ -319,6 +342,28 @@ function dibujarPagina2(doc, { placa, codigoCertificado, verificaciones, veredic
   doc.fillColor('#000000');
 }
 
+function dibujarSeccionGarantia(doc, { codigoCertificado }) {
+  doc.fontSize(13).font('Helvetica-Bold').fillColor('#1A1A1A').text('Garantía CERTIMOTORS');
+  doc.moveDown(0.3);
+
+  const xCaja = doc.page.margins.left;
+  const anchoCaja = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const yCaja = doc.y;
+  const texto =
+    `Este certificado tiene una validez de 90 días a partir de la fecha de inspección, bajo el código ${codigoCertificado}. ` +
+    'CERTIMOTORS garantiza la objetividad e independencia de la evaluación realizada y la trazabilidad de cada hallazgo ' +
+    'registrado durante la inspección de 110 puntos. Conserve este documento como respaldo de la condición del vehículo ' +
+    'al momento de la certificación.';
+
+  doc.font('Helvetica').fontSize(10);
+  const alturaTexto = doc.heightOfString(texto, { width: anchoCaja - 16 });
+  doc.save().rect(xCaja, yCaja, anchoCaja, alturaTexto + 16).fillAndStroke('#F9FAFB', '#E5E7EB').restore();
+  doc.fillColor('#222222').text(texto, xCaja + 8, yCaja + 8, { width: anchoCaja - 16 });
+  doc.x = doc.page.margins.left;
+  doc.y = yCaja + alturaTexto + 28;
+  doc.fillColor('#000000').fontSize(10);
+}
+
 function dibujarLineaFirma(doc, x, width, etiqueta, nombre) {
   const y = doc.y;
   doc.moveTo(x, y).lineTo(x + width, y).strokeColor('#888888').stroke();
@@ -329,6 +374,8 @@ function dibujarLineaFirma(doc, x, width, etiqueta, nombre) {
 
 async function dibujarPaginaFirmasYQr(doc, { placa, codigoCertificado, orden }) {
   dibujarEncabezadoPrincipal(doc, { placa, codigoCertificado });
+
+  dibujarSeccionGarantia(doc, { codigoCertificado });
 
   doc.fontSize(13).font('Helvetica-Bold').fillColor('#1A1A1A').text('Firmas');
   doc.moveDown(3);
