@@ -48,7 +48,23 @@ export async function procesarCallbackAdmin(db, payload, botToken) {
   const { callback_query: cq } = payload;
   if (!cq) return;
 
-  const chatId = cq.message?.chat?.id || cq.from?.id;
+  // Authorization: only the configured admin may trigger certificate actions.
+  if (String(cq.from?.id) !== String(ADMIN_CHAT_ID)) {
+    logger.warn('procesarCallbackAdmin: callback de usuario no autorizado', {
+      from: cq.from?.id,
+      esperado: ADMIN_CHAT_ID,
+    });
+    try {
+      await telegramPost(botToken, 'answerCallbackQuery', {
+        callback_query_id: cq.id,
+        text: 'No autorizado',
+        show_alert: true,
+      });
+    } catch (_) {}
+    return;
+  }
+
+  const chatId = cq.from.id;
 
   try {
     await telegramPost(botToken, 'answerCallbackQuery', { callback_query_id: cq.id });
