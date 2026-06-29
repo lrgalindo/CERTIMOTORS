@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import PDFDocument from 'pdfkit';
@@ -495,7 +496,7 @@ export async function generarCertificado(placa, db) {
     doc.end();
   });
 
-  const nombreArchivo = `${placa}_${Date.now()}.pdf`;
+  const nombreArchivo = `${placa}_${crypto.randomBytes(16).toString('hex')}.pdf`;
   let url;
   try {
     await db.asegurarBucketCertificados();
