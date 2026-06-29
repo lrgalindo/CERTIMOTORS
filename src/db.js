@@ -42,6 +42,16 @@ export async function obtenerClientePorNumero(numero_telefono) {
   return data;
 }
 
+export async function obtenerClientePorId(id) {
+  const { data, error } = await supabase
+    .from('clientes')
+    .select('*')
+    .eq('id', id)
+    .single();
+  if (error && error.code !== 'PGRST116') throw error;
+  return data;
+}
+
 export async function crearOrden(placa, data = {}) {
   const id = uuidv4();
   const { cliente_id, tipo_auto = 'RODADO', status = 'INICIADA' } = data;
@@ -195,10 +205,41 @@ export async function obtenerEstadisticas() {
   };
 }
 
+// Requires migration 003_cola_jobs.sql to be applied in Supabase
+export async function reclamarJobsPendientes(limite = 10) {
+  const { data, error } = await supabase.rpc('reclamar_jobs_pendientes', { p_limite: limite });
+  if (error) throw new Error(`Error claiming pending jobs: ${error.message}`);
+  return data || [];
+}
+
+export async function marcarJobCompletado(id) {
+  const { error } = await supabase
+    .from('cola_jobs')
+    .update({ status: 'completado', updated_at: new Date().toISOString() })
+    .eq('id', id);
+  if (error) throw new Error(`Error marking job completed: ${error.message}`);
+}
+
+export async function marcarJobFallido(id, { intentos, maxIntentos, error: errorMsg, proximoIntentoEn }) {
+  const nuevoStatus = intentos >= maxIntentos ? 'fallido' : 'pendiente';
+  const { error } = await supabase
+    .from('cola_jobs')
+    .update({
+      status: nuevoStatus,
+      intentos,
+      error: errorMsg,
+      proximo_intento_en: proximoIntentoEn,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id);
+  if (error) throw new Error(`Error marking job failed: ${error.message}`);
+}
+
 export default {
   initDB,
   crearCliente,
   obtenerClientePorNumero,
+  obtenerClientePorId,
   crearOrden,
   obtenerOrdenPorPlaca,
   obtenerConversacionesPorPlaca,
@@ -211,4 +252,7 @@ export default {
   registrarCostoAPI,
   obtenerGastoDesde,
   obtenerEstadisticas,
+  reclamarJobsPendientes,
+  marcarJobCompletado,
+  marcarJobFallido,
 };
