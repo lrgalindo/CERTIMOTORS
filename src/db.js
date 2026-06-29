@@ -295,6 +295,34 @@ export async function obtenerEstadisticas() {
   };
 }
 
+export async function obtenerStatsReporte() {
+  const hoyISO = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+  const [ordenesHoyRes, completadasHoyRes, estancadasRes, gastoHoyRes] = await Promise.all([
+    supabase.from('ordenes').select('id', { count: 'exact', head: true }).gte('created_at', hoyISO),
+    supabase
+      .from('ordenes')
+      .select('id', { count: 'exact', head: true })
+      .in('status', ['INSPECCION_COMPLETA', 'TRAMITE_COMPLETO', 'CERTIFICADO_APROBADO'])
+      .gte('updated_at', hoyISO),
+    supabase
+      .from('ordenes')
+      .select('id', { count: 'exact', head: true })
+      .not('status', 'in', '(INSPECCION_COMPLETA,TRAMITE_COMPLETO,CERTIFICADO_APROBADO)')
+      .lte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()),
+    supabase.from('costos_api').select('costo_estimado_usd').gte('created_at', hoyISO),
+  ]);
+
+  const gastoHoy = (gastoHoyRes.data || []).reduce((sum, r) => sum + (r.costo_estimado_usd || 0), 0);
+
+  return {
+    ordenes_hoy: ordenesHoyRes.count || 0,
+    completadas_hoy: completadasHoyRes.count || 0,
+    leads_estancados_24h: estancadasRes.count || 0,
+    gasto_dia_usd: Number(gastoHoy.toFixed(4)),
+  };
+}
+
 export async function encolarJob(proveedor, externalId, payload) {
   const id = uuidv4();
   const { data: result, error } = await supabase
@@ -366,6 +394,7 @@ export default {
   registrarCostoAPI,
   obtenerGastoDesde,
   obtenerEstadisticas,
+  obtenerStatsReporte,
   encolarJob,
   reclamarJobsPendientes,
   marcarJobCompletado,
