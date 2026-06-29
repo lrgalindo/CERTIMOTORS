@@ -4,7 +4,7 @@ import { AppError, ClaudeAPIError } from './errors.js';
 import { seleccionarModeloPorRol } from './model-router.js';
 import { verificarPresupuesto, aplicarDegradacion, registrarLlamada } from './budget-tracker.js';
 
-export async function llamarClaudeAPI(apiKey, db, systemPrompt, messages, rol, placa = null) {
+async function ejecutarLlamadaClaude(apiKey, db, systemPrompt, messages, rol, placa, extra = {}) {
   const presupuesto = await verificarPresupuesto(db);
   if (presupuesto.nivel === 'bloqueado') {
     logger.error('Presupuesto mensual agotado', presupuesto);
@@ -21,13 +21,15 @@ export async function llamarClaudeAPI(apiKey, db, systemPrompt, messages, rol, p
   }
 
   try {
+    const url = process.env.ANTHROPIC_API_URL || 'https://api.anthropic.com/v1/messages';
     const response = await axios.post(
-      'https://api.anthropic.com/v1/messages',
+      url,
       {
         model: modelo,
         max_tokens: maxTokens,
         system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
         messages,
+        ...extra,
       },
       {
         headers: {
@@ -38,15 +40,34 @@ export async function llamarClaudeAPI(apiKey, db, systemPrompt, messages, rol, p
       }
     );
 
-    const texto = response.data.content[0]?.text || '';
     const usage = response.data.usage || {};
-
     const costoUsd = await registrarLlamada(db, { rol, modelo, tipoTarea, usage, placa });
     logger.debug('Claude API response', { tokens: usage.output_tokens, modelo, rol, costoUsd });
-    return texto;
+    return response.data;
   } catch (error) {
     const errorMsg = error.response?.data?.error?.message || error.message;
     logger.error('Claude API error', { error: errorMsg, modelo, rol });
     throw new ClaudeAPIError(`Claude API: ${errorMsg}`, error);
   }
+}
+
+export async function llamarClaudeAPI(apiKey, db, systemPrompt, messages, rol, placa = null) {
+  const data = await ejecutarLlamadaClaude(apiKey, db, systemPrompt, messages, rol, placa);
+  return data.content?.[0]?.text || '';
+}
+
+// Fuerza tool_choice sobre el tool dado y devuelve su input ya parseado.
+// Usado por los agentes Mecánico/Tramitador para extraer datos estructurados
+// de lenguaje libre sin un segundo round-trip a Claude.
+export async function llamarClaudeConTool(apiKey, db, systemPrompt, messages, rol, placa, tool) {
+  const data = await ejecutarLlamadaClaude(apiKey, db, systemPrompt, messages, rol, placa, {
+    tools: [tool],
+    tool_choice: { type: 'tool', name: tool.name },
+  });
+
+  const toolUse = data.content?.find((block) => block.type === 'tool_use');
+  if (!toolUse) {
+    throw new ClaudeAPIError('Claude no devolvió la llamada a herramienta esperada', null);
+  }
+  return toolUse.input;
 }

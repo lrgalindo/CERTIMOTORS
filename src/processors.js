@@ -1,13 +1,41 @@
-import axios from 'axios';
 import { prompts } from './prompts.js';
 import { logger } from './logger.js';
 import { validatePlaca, validatePhoneNumber, validateMessage } from './validators.js';
-import { llamarClaudeAPI } from './claude-client.js';
+import { llamarClaudeAPI, llamarClaudeConTool } from './claude-client.js';
 import { enviarMensajeTelegram } from './telegram-client.js';
+import { TOOL_REGISTRAR_INSPECCION, TOOL_REGISTRAR_AVANCE_TRAMITE } from './tools.js';
+import { validarOrden } from './validar-orden.js';
+import { generarCertificado } from './pdf-generator.js';
+
+const ESTADOS_HALLAZGO = ['BIEN', 'REGULAR', 'MAL'];
+const AREAS_TRAMITE = ['IMPUESTO_CIRCULACION', 'CALCOMANIA', 'MULTAS', 'GRAVAMENES'];
+const ESTADOS_TRAMITE = [
+  'SOLVENTE',
+  'PENDIENTE',
+  'VIGENTE',
+  'VENCIDA',
+  'SIN_MULTAS',
+  'CON_MULTAS',
+  'SIN_GRAVAMENES',
+  'CON_GRAVAMENES',
+  'NO_VERIFICADO',
+];
 
 export function extraerPlaca(texto) {
   const match = texto.match(/[A-Z]\d{3}[A-Z]{3}/);
   return match ? match[0] : null;
+}
+
+// Si el mecánico no repite la placa, asume que sigue trabajando en la
+// inspección activa más reciente (si no está ya cerrada).
+async function resolverPlacaActivaMecanico(db, mecanicoId) {
+  const ultimaPlaca = await db.obtenerUltimaPlacaPorMecanico(mecanicoId);
+  if (!ultimaPlaca) return null;
+
+  const orden = await db.obtenerOrdenPorPlaca(ultimaPlaca);
+  if (!orden || orden.status === 'INSPECCION_COMPLETA') return null;
+
+  return ultimaPlaca;
 }
 
 export async function procesarWhatsapp(db, payload, apiKey) {
@@ -61,22 +89,13 @@ export async function procesarWhatsapp(db, payload, apiKey) {
     await db.guardarConversacion(placa, cliente.id, 'CLIENTE', textoCliente, respuesta);
   }
 
-  await axios.post(
-    `https://graph.facebook.com/v18.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
-    {
-      messaging_product: 'whatsapp',
-      to: numeroCliente,
-      type: 'text',
-      text: { body: respuesta },
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-    }
-  );
-  logger.success('Respuesta enviada al cliente por WhatsApp', { numeroCliente });
+  // Gap conocido (pre-existente): no hay integración de envío saliente de WhatsApp
+  // (Graph API send-message). El webhook ya respondió 200 antes de este punto, así
+  // que esta respuesta no llega al cliente hasta que se implemente el envío saliente.
+  logger.warn('Respuesta de Claude generada pero no enviada a WhatsApp (envío saliente no implementado)', {
+    placa,
+    respuesta: respuesta.substring(0, 50),
+  });
 }
 
 export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
@@ -90,7 +109,7 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
 
   logger.info(`Mechanic: ${userName} (${telegram_id})`, { text: texto.substring(0, 50) });
 
-  const placa = extraerPlaca(texto);
+  const placa = extraerPlaca(texto) || (await resolverPlacaActivaMecanico(db, telegram_id));
   if (!placa) {
     await enviarMensajeTelegram(botToken, chatId, '¿Cuál es la placa del vehículo que estás inspeccionando?');
     return;
@@ -104,22 +123,55 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
   }
 
   const revisiones = await db.obtenerRevisionesPorPlaca(placa);
-  const punto_actual = revisiones.length + 1;
+  const puntosCompletados = new Set(revisiones.map((r) => r.punto_actual)).size;
+  const ultimosHallazgos =
+    revisiones
+      .slice(-5)
+      .map((r) => `Punto ${r.punto_actual}: ${r.respuesta}`)
+      .join('\n') || null;
 
-  const systemPrompt = prompts.construirSystemPromptMecanico(placa, orden.tipo_auto, punto_actual, texto);
-  const respuesta = await llamarClaudeAPI(
+  const systemPrompt = prompts.construirSystemPromptMecanico(placa, orden.tipo_auto, puntosCompletados, ultimosHallazgos);
+  const {
+    hallazgos = [],
+    inspeccion_completa: inspeccionCompleta = false,
+    respuesta_mecanico: respuesta,
+  } = await llamarClaudeConTool(
     apiKey,
     db,
     systemPrompt,
     [{ role: 'user', content: texto }],
     'mecanico',
-    placa
+    placa,
+    TOOL_REGISTRAR_INSPECCION
   );
 
-  await db.guardarRevision(placa, telegram_id, punto_actual, texto);
+  for (const hallazgo of hallazgos) {
+    if (!Number.isInteger(hallazgo.punto) || hallazgo.punto < 1 || hallazgo.punto > 110 || !ESTADOS_HALLAZGO.includes(hallazgo.estado)) {
+      logger.warn('Hallazgo inválido descartado', { placa, hallazgo });
+      continue;
+    }
+    const detalle = [hallazgo.estado, hallazgo.nombre_punto, hallazgo.observacion].filter(Boolean).join(' - ');
+    await db.guardarRevision(placa, telegram_id, hallazgo.punto, detalle);
+  }
+
+  if (inspeccionCompleta) {
+    await db.actualizarDatosOrden(placa, { inspector_nombre: userName });
+    await db.actualizarStatusOrden(placa, 'INSPECCION_COMPLETA');
+    await db.crearNotificacion(placa, 'INSPECCION_COMPLETA', `Inspección completada por ${userName}`);
+
+    if (orden.servicio !== 'FULL') {
+      try {
+        const { url } = await generarCertificado(placa, db);
+        await db.crearNotificacion(placa, 'CERTIFICADO_GENERADO', `Certificado generado: ${url}`);
+      } catch (error) {
+        logger.error('Error generando certificado (servicio estándar)', { placa, error: error.message });
+      }
+    }
+  }
+
   await enviarMensajeTelegram(botToken, chatId, respuesta);
 
-  logger.success('Mechanic response sent', { placa, punto_actual });
+  logger.success('Mechanic response sent', { placa, hallazgos: hallazgos.length, inspeccionCompleta });
 }
 
 export async function procesarTelegramTramitador(db, payload, botToken, apiKey) {
@@ -147,19 +199,55 @@ export async function procesarTelegramTramitador(db, payload, botToken, apiKey) 
   }
 
   const cliente = await db.obtenerClientePorId(orden.cliente_id);
-  const etapa = orden.status;
+  const notificaciones = await db.obtenerNotificacionesPorPlaca(placa);
+  const avancesPrevios =
+    notificaciones
+      .slice(0, 5)
+      .map((n) => `${n.tipo}: ${n.mensaje}`)
+      .join('\n') || null;
 
-  const systemPrompt = prompts.construirSystemPromptTramitador(placa, cliente, etapa, { SAT: 'Pendiente' });
-  const respuesta = await llamarClaudeAPI(
+  const systemPrompt = prompts.construirSystemPromptTramitador(placa, cliente, avancesPrevios);
+  const {
+    actualizaciones = [],
+    tramite_completo: tramiteCompleto = false,
+    respuesta_tramitador: respuesta,
+  } = await llamarClaudeConTool(
     apiKey,
     db,
     systemPrompt,
     [{ role: 'user', content: texto }],
     'tramitador',
-    placa
+    placa,
+    TOOL_REGISTRAR_AVANCE_TRAMITE
   );
+
+  for (const actualizacion of actualizaciones) {
+    if (!AREAS_TRAMITE.includes(actualizacion.area) || !ESTADOS_TRAMITE.includes(actualizacion.estado)) {
+      logger.warn('Actualización de trámite inválida descartada', { placa, actualizacion });
+      continue;
+    }
+    const mensaje = [actualizacion.estado, actualizacion.detalle].filter(Boolean).join(': ');
+    await db.crearNotificacion(placa, actualizacion.area, mensaje);
+  }
+
+  if (tramiteCompleto) {
+    await db.actualizarStatusOrden(placa, 'TRAMITE_COMPLETO');
+    await db.crearNotificacion(placa, 'TRAMITE_COMPLETO', `Trámite completado, generando certificado (reportado por ${userName})`);
+    try {
+      const { validacion } = await validarOrden(db, apiKey, placa);
+      await db.crearNotificacion(placa, 'CERTIFICADO_VALIDACION', validacion);
+    } catch (error) {
+      logger.error('Error disparando validación de certificado', { placa, error: error.message });
+    }
+    try {
+      const { url } = await generarCertificado(placa, db);
+      await db.crearNotificacion(placa, 'CERTIFICADO_GENERADO', `Certificado generado: ${url}`);
+    } catch (error) {
+      logger.error('Error generando certificado (servicio full)', { placa, error: error.message });
+    }
+  }
 
   await enviarMensajeTelegram(botToken, chatId, respuesta);
 
-  logger.success('Processor response sent', { placa, etapa });
+  logger.success('Processor response sent', { placa, tramiteCompleto });
 }

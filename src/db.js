@@ -42,16 +42,6 @@ export async function obtenerClientePorNumero(numero_telefono) {
   return data;
 }
 
-export async function obtenerClientePorId(id) {
-  const { data, error } = await supabase
-    .from('clientes')
-    .select('*')
-    .eq('id', id)
-    .single();
-  if (error && error.code !== 'PGRST116') throw error;
-  return data;
-}
-
 export async function crearOrden(placa, data = {}) {
   const id = uuidv4();
   const { cliente_id, tipo_auto = 'RODADO', status = 'INICIADA' } = data;
@@ -71,7 +61,27 @@ export async function obtenerOrdenPorPlaca(placa) {
     .select('*')
     .eq('placa', placa)
     .single();
-  
+
+  if (error && error.code !== 'PGRST116') throw error;
+  return data;
+}
+
+export async function actualizarStatusOrden(placa, status) {
+  const { error } = await supabase
+    .from('ordenes')
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq('placa', placa);
+
+  if (error) throw new Error(`Error actualizando status de orden: ${error.message}`);
+}
+
+export async function obtenerClientePorId(id) {
+  const { data, error } = await supabase
+    .from('clientes')
+    .select('*')
+    .eq('id', id)
+    .single();
+
   if (error && error.code !== 'PGRST116') throw error;
   return data;
 }
@@ -121,6 +131,20 @@ export async function obtenerRevisionesPorPlaca(placa) {
   return data || [];
 }
 
+// Última placa en la que este mecánico registró un hallazgo — permite
+// continuar una inspección en curso sin que repita la placa en cada mensaje.
+export async function obtenerUltimaPlacaPorMecanico(mecanicoId) {
+  const { data, error } = await supabase
+    .from('revisiones')
+    .select('placa')
+    .eq('mecanico_id', String(mecanicoId))
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (error) throw new Error(`Error obteniendo última placa del mecánico: ${error.message}`);
+  return data?.[0]?.placa || null;
+}
+
 export async function crearNotificacion(placa, tipo, mensaje) {
   const id = uuidv4();
   const { data: result, error } = await supabase
@@ -130,6 +154,72 @@ export async function crearNotificacion(placa, tipo, mensaje) {
 
   if (error) throw new Error(`Error creating notification: ${error.message}`);
   return result[0];
+}
+
+export async function actualizarDatosOrden(placa, datos) {
+  const { error } = await supabase
+    .from('ordenes')
+    .update({ ...datos, updated_at: new Date().toISOString() })
+    .eq('placa', placa);
+
+  if (error) throw new Error(`Error actualizando datos de orden: ${error.message}`);
+}
+
+export async function guardarCertificado(placa, url) {
+  const { error } = await supabase
+    .from('ordenes')
+    .update({ certificado_url: url, certificado_generado_at: new Date().toISOString() })
+    .eq('placa', placa);
+
+  if (error) throw new Error(`Error guardando certificado: ${error.message}`);
+}
+
+export async function obtenerNotificacionesPorPlacaYTipos(placa, tipos) {
+  const { data, error } = await supabase
+    .from('notificaciones')
+    .select('*')
+    .eq('placa', placa)
+    .in('tipo', tipos)
+    .order('created_at', { ascending: false });
+
+  if (error) throw new Error(`Error fetching notifications by tipos: ${error.message}`);
+  return data || [];
+}
+
+// Crea el bucket público "certificados" si no existe todavía. Idempotente:
+// se puede llamar en cada arranque sin riesgo de duplicar el bucket.
+export async function asegurarBucketCertificados() {
+  const { data: buckets, error } = await supabase.storage.listBuckets();
+  if (error) throw new Error(`Error listando buckets de Storage: ${error.message}`);
+
+  const existe = (buckets || []).some((b) => b.name === 'certificados');
+  if (existe) return;
+
+  const { error: createError } = await supabase.storage.createBucket('certificados', { public: true });
+  if (createError) throw new Error(`Error creando bucket certificados: ${createError.message}`);
+}
+
+export async function subirCertificado(nombreArchivo, buffer) {
+  const { error } = await supabase.storage.from('certificados').upload(nombreArchivo, buffer, {
+    contentType: 'application/pdf',
+    upsert: true,
+  });
+  if (error) throw new Error(`Error subiendo certificado a Storage: ${error.message}`);
+
+  const { data } = supabase.storage.from('certificados').getPublicUrl(nombreArchivo);
+  return data.publicUrl;
+}
+
+export async function obtenerNotificacionesPorPlaca(placa) {
+  const { data, error } = await supabase
+    .from('notificaciones')
+    .select('*')
+    .eq('placa', placa)
+    .order('created_at', { ascending: false })
+    .limit(10);
+
+  if (error) throw new Error(`Error fetching notifications by placa: ${error.message}`);
+  return data || [];
 }
 
 export async function obtenerNotificacionesPendientes() {
@@ -205,10 +295,24 @@ export async function obtenerEstadisticas() {
   };
 }
 
-// Requires migration 003_cola_jobs.sql to be applied in Supabase
-export async function reclamarJobsPendientes(limite = 10) {
+export async function encolarJob(proveedor, externalId, payload) {
+  const id = uuidv4();
+  const { data: result, error } = await supabase
+    .from('cola_jobs')
+    .insert([{ id, proveedor, external_id: externalId, payload }])
+    .select();
+
+  if (error) {
+    // Webhook retry con el mismo external_id: ya está encolado, no es un error.
+    if (error.code === '23505') return null;
+    throw new Error(`Error encolando job: ${error.message}`);
+  }
+  return result[0];
+}
+
+export async function reclamarJobsPendientes(limite) {
   const { data, error } = await supabase.rpc('reclamar_jobs_pendientes', { p_limite: limite });
-  if (error) throw new Error(`Error claiming pending jobs: ${error.message}`);
+  if (error) throw new Error(`Error reclamando jobs pendientes: ${error.message}`);
   return data || [];
 }
 
@@ -217,22 +321,24 @@ export async function marcarJobCompletado(id) {
     .from('cola_jobs')
     .update({ status: 'completado', updated_at: new Date().toISOString() })
     .eq('id', id);
-  if (error) throw new Error(`Error marking job completed: ${error.message}`);
+
+  if (error) throw new Error(`Error marcando job completado: ${error.message}`);
 }
 
 export async function marcarJobFallido(id, { intentos, maxIntentos, error: errorMsg, proximoIntentoEn }) {
-  const nuevoStatus = intentos >= maxIntentos ? 'fallido' : 'pendiente';
+  const status = intentos >= maxIntentos ? 'fallido_permanente' : 'pendiente';
   const { error } = await supabase
     .from('cola_jobs')
     .update({
-      status: nuevoStatus,
+      status,
       intentos,
       error: errorMsg,
       proximo_intento_en: proximoIntentoEn,
       updated_at: new Date().toISOString(),
     })
     .eq('id', id);
-  if (error) throw new Error(`Error marking job failed: ${error.message}`);
+
+  if (error) throw new Error(`Error marcando job fallido: ${error.message}`);
 }
 
 export default {
@@ -242,16 +348,25 @@ export default {
   obtenerClientePorId,
   crearOrden,
   obtenerOrdenPorPlaca,
+  actualizarStatusOrden,
+  actualizarDatosOrden,
+  guardarCertificado,
   obtenerConversacionesPorPlaca,
   guardarConversacion,
   guardarRevision,
   obtenerRevisionesPorPlaca,
+  obtenerUltimaPlacaPorMecanico,
   crearNotificacion,
+  obtenerNotificacionesPorPlaca,
+  obtenerNotificacionesPorPlacaYTipos,
+  asegurarBucketCertificados,
+  subirCertificado,
   obtenerNotificacionesPendientes,
   marcarNotificacionEnviada,
   registrarCostoAPI,
   obtenerGastoDesde,
   obtenerEstadisticas,
+  encolarJob,
   reclamarJobsPendientes,
   marcarJobCompletado,
   marcarJobFallido,
