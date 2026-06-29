@@ -2,7 +2,7 @@ import { prompts } from './prompts.js';
 import { logger } from './logger.js';
 import { validatePlaca, validatePhoneNumber, validateMessage } from './validators.js';
 import { llamarClaudeAPI, llamarClaudeConTool } from './claude-client.js';
-import { enviarMensajeTelegram } from './telegram-client.js';
+import { enviarMensajeTelegram, obtenerImagenTelegram } from './telegram-client.js';
 import { TOOL_REGISTRAR_INSPECCION, TOOL_REGISTRAR_AVANCE_TRAMITE } from './tools.js';
 import { validarOrden } from './validar-orden.js';
 
@@ -33,7 +33,9 @@ export async function procesarWhatsapp(db, payload, apiKey) {
 
   const mensaje = messages[0];
   const numeroCliente = mensaje.from;
-  const textoCliente = mensaje.text.body;
+  // Soporte de mensajes de imagen: WhatsApp envía { type: 'image', image: { id } } sin campo text
+  const textoCliente = mensaje.text?.body || (mensaje.image ? '[Imagen adjunta]' : null);
+  if (!textoCliente) return;
 
   validatePhoneNumber(numeroCliente);
   validateMessage(textoCliente);
@@ -89,12 +91,22 @@ export async function procesarWhatsapp(db, payload, apiKey) {
 
 export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
   const { message } = payload;
-  if (!message || !message.text) return;
+  if (!message || (!message.text && !message.photo)) return;
 
   const chatId = message.chat.id;
   const telegram_id = message.from.id;
-  const texto = message.text;
   const userName = message.from?.first_name || 'Mecánico';
+
+  // Soporte de mensajes con foto: usar caption si hay foto sin texto
+  let texto = message.text || message.caption || '';
+  if (message.photo) {
+    const mejorFoto = message.photo[message.photo.length - 1];
+    const imagenBase64 = await obtenerImagenTelegram(botToken, mejorFoto.file_id);
+    if (!imagenBase64) {
+      logger.warn('No se pudo descargar imagen de Telegram', { fileId: mejorFoto.file_id });
+    }
+    if (!texto) texto = '[Foto adjunta]';
+  }
 
   logger.info(`Mechanic: ${userName} (${telegram_id})`, { text: texto.substring(0, 50) });
 
@@ -155,11 +167,11 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
 
 export async function procesarTelegramTramitador(db, payload, botToken, apiKey) {
   const { message } = payload;
-  if (!message || !message.text) return;
+  if (!message || (!message.text && !message.photo)) return;
 
   const chatId = message.chat.id;
   const telegram_id = message.from.id;
-  const texto = message.text;
+  const texto = message.text || message.caption || '[Foto adjunta]';
   const userName = message.from?.first_name || 'Tramitador';
 
   logger.info(`Processor: ${userName} (${telegram_id})`, { text: texto.substring(0, 50) });

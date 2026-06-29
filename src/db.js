@@ -241,6 +241,32 @@ export async function obtenerEstadisticas() {
   };
 }
 
+export async function guardarTokenAprobacion(placa, token) {
+  const { error } = await supabase
+    .from('tokens_aprobacion')
+    .insert([{ token, placa, usado: false }]);
+  if (error) throw new Error(`Error guardando token de aprobación: ${error.message}`);
+}
+
+export async function obtenerPlacaPorToken(token) {
+  const { data, error } = await supabase
+    .from('tokens_aprobacion')
+    .select('placa')
+    .eq('token', token)
+    .eq('usado', false)
+    .single();
+  if (error && error.code !== 'PGRST116') throw error;
+  return data?.placa || null;
+}
+
+export async function marcarTokenUsado(token) {
+  const { error } = await supabase
+    .from('tokens_aprobacion')
+    .update({ usado: true })
+    .eq('token', token);
+  if (error) throw new Error(`Error marcando token como usado: ${error.message}`);
+}
+
 export async function encolarJob(proveedor, externalId, payload) {
   const id = uuidv4();
   const { data: result, error } = await supabase
@@ -307,6 +333,9 @@ export default {
   registrarCostoAPI,
   obtenerGastoDesde,
   obtenerEstadisticas,
+  guardarTokenAprobacion,
+  obtenerPlacaPorToken,
+  marcarTokenUsado,
   encolarJob,
   reclamarJobsPendientes,
   marcarJobCompletado,
