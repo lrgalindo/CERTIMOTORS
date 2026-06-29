@@ -7,6 +7,7 @@ import { enviarMensajeTelegram } from './telegram-client.js';
 import { TOOL_REGISTRAR_INSPECCION, TOOL_REGISTRAR_AVANCE_TRAMITE } from './tools.js';
 import { validarOrden } from './validar-orden.js';
 import { generarCertificado } from './pdf-generator.js';
+import { notificarAprobacionAdmin } from './pdf-approval.js';
 
 const ESTADOS_HALLAZGO = ['BIEN', 'REGULAR', 'MAL'];
 const AREAS_TRAMITE = ['IMPUESTO_CIRCULACION', 'CALCOMANIA', 'MULTAS', 'GRAVAMENES'];
@@ -27,16 +28,52 @@ export function extraerPlaca(texto) {
   return match ? match[0] : null;
 }
 
-// Si el mecánico no repite la placa, asume que sigue trabajando en la
-// inspección activa más reciente (si no está ya cerrada).
 async function resolverPlacaActivaMecanico(db, mecanicoId) {
   const ultimaPlaca = await db.obtenerUltimaPlacaPorMecanico(mecanicoId);
   if (!ultimaPlaca) return null;
-
   const orden = await db.obtenerOrdenPorPlaca(ultimaPlaca);
   if (!orden || orden.status === 'INSPECCION_COMPLETA') return null;
-
   return ultimaPlaca;
+}
+
+// Downloads any URL as base64. On failure, the caller decides whether to continue.
+async function descargarImagenBase64(url, headers = {}) {
+  const resp = await axios.get(url, { responseType: 'arraybuffer', headers });
+  const base64 = Buffer.from(resp.data).toString('base64');
+  const contentType = resp.headers['content-type']?.split(';')[0] || 'image/jpeg';
+  return { base64, contentType };
+}
+
+// Returns an array of Anthropic content blocks: [image?, text].
+// If the download fails, returns only the text block so the flow continues.
+async function construirContentConImagen(texto, mediaId, canal, botToken) {
+  const bloques = [];
+
+  try {
+    if (canal === 'whatsapp') {
+      const infoResp = await axios.get(`https://graph.facebook.com/v18.0/${mediaId}`, {
+        headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` },
+      });
+      const { base64, contentType } = await descargarImagenBase64(infoResp.data.url, {
+        Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+      });
+      bloques.push({ type: 'image', source: { type: 'base64', media_type: contentType, data: base64 } });
+    } else if (canal === 'telegram') {
+      const fileResp = await axios.get(`https://api.telegram.org/bot${botToken}/getFile`, {
+        params: { file_id: mediaId },
+      });
+      const filePath = fileResp.data.result.file_path;
+      const { base64, contentType } = await descargarImagenBase64(
+        `https://api.telegram.org/file/bot${botToken}/${filePath}`
+      );
+      bloques.push({ type: 'image', source: { type: 'base64', media_type: contentType, data: base64 } });
+    }
+  } catch (err) {
+    logger.warn('No se pudo descargar imagen, continuando sin ella', { canal, error: err.message });
+  }
+
+  bloques.push({ type: 'text', text: texto || 'Imagen adjunta' });
+  return bloques;
 }
 
 export async function procesarWhatsapp(db, payload, apiKey) {
@@ -45,21 +82,34 @@ export async function procesarWhatsapp(db, payload, apiKey) {
 
   const mensaje = messages[0];
   const numeroCliente = mensaje.from;
-  const textoCliente = mensaje.text.body;
+  const tipoMensaje = mensaje.type;
 
   validatePhoneNumber(numeroCliente);
-  validateMessage(textoCliente);
 
-  logger.info(`WhatsApp: +${numeroCliente}`, { text: textoCliente.substring(0, 50) });
+  let textoCliente;
+  let contentUser;
 
-  const placa = extraerPlaca(textoCliente);
+  if (tipoMensaje === 'image') {
+    textoCliente = mensaje.image?.caption || 'El cliente envió una imagen';
+    logger.info(`WhatsApp imagen: +${numeroCliente}`, { caption: textoCliente.substring(0, 50) });
+    contentUser = await construirContentConImagen(textoCliente, mensaje.image?.id, 'whatsapp', null);
+  } else if (tipoMensaje === 'text') {
+    textoCliente = mensaje.text?.body || '';
+    validateMessage(textoCliente);
+    logger.info(`WhatsApp: +${numeroCliente}`, { text: textoCliente.substring(0, 50) });
+    contentUser = textoCliente;
+  } else {
+    logger.info(`WhatsApp: tipo de mensaje no soportado (${tipoMensaje}), ignorando`);
+    return;
+  }
+
   let cliente = await db.obtenerClientePorNumero(numeroCliente);
-
   if (!cliente) {
     cliente = await db.crearCliente(numeroCliente, { nombre: 'Cliente', tipo: 'CLIENTE' });
     logger.success(`New client: +${numeroCliente}`);
   }
 
+  const placa = extraerPlaca(textoCliente);
   let orden = null;
   if (placa) {
     validatePlaca(placa);
@@ -81,7 +131,7 @@ export async function procesarWhatsapp(db, payload, apiKey) {
     apiKey,
     db,
     systemPrompt,
-    [{ role: 'user', content: textoCliente }],
+    [{ role: 'user', content: contentUser }],
     'cliente',
     placa
   );
@@ -110,11 +160,13 @@ export async function procesarWhatsapp(db, payload, apiKey) {
 
 export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
   const { message } = payload;
-  if (!message || !message.text) return;
+  const hasPhoto = Boolean(message?.photo?.length);
+  const hasText = Boolean(message?.text);
+  if (!message || (!hasText && !hasPhoto)) return;
 
   const chatId = message.chat.id;
   const telegram_id = message.from.id;
-  const texto = message.text;
+  const texto = message.text || message.caption || (hasPhoto ? 'Foto de hallazgo' : '');
   const userName = message.from?.first_name || 'Mecánico';
 
   logger.info(`Mechanic: ${userName} (${telegram_id})`, { text: texto.substring(0, 50) });
@@ -140,6 +192,14 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
       .map((r) => `Punto ${r.punto_actual}: ${r.respuesta}`)
       .join('\n') || null;
 
+  let contentUser;
+  if (hasPhoto) {
+    const fotoMasGrande = message.photo[message.photo.length - 1];
+    contentUser = await construirContentConImagen(texto, fotoMasGrande.file_id, 'telegram', botToken);
+  } else {
+    contentUser = texto;
+  }
+
   const systemPrompt = prompts.construirSystemPromptMecanico(placa, orden.tipo_auto, puntosCompletados, ultimosHallazgos);
   const {
     hallazgos = [],
@@ -149,14 +209,19 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
     apiKey,
     db,
     systemPrompt,
-    [{ role: 'user', content: texto }],
+    [{ role: 'user', content: contentUser }],
     'mecanico',
     placa,
     TOOL_REGISTRAR_INSPECCION
   );
 
   for (const hallazgo of hallazgos) {
-    if (!Number.isInteger(hallazgo.punto) || hallazgo.punto < 1 || hallazgo.punto > 110 || !ESTADOS_HALLAZGO.includes(hallazgo.estado)) {
+    if (
+      !Number.isInteger(hallazgo.punto) ||
+      hallazgo.punto < 1 ||
+      hallazgo.punto > 110 ||
+      !ESTADOS_HALLAZGO.includes(hallazgo.estado)
+    ) {
       logger.warn('Hallazgo inválido descartado', { placa, hallazgo });
       continue;
     }
@@ -173,6 +238,8 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
       try {
         const { url } = await generarCertificado(placa, db);
         await db.crearNotificacion(placa, 'CERTIFICADO_GENERADO', `Certificado generado: ${url}`);
+        const criticos = hallazgos.filter((h) => h.estado === 'MAL').length;
+        await notificarAprobacionAdmin(placa, url, orden, { criticos });
       } catch (error) {
         logger.error('Error generando certificado (servicio estándar)', { placa, error: error.message });
       }
@@ -180,7 +247,6 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
   }
 
   await enviarMensajeTelegram(botToken, chatId, respuesta);
-
   logger.success('Mechanic response sent', { placa, hallazgos: hallazgos.length, inspeccionCompleta });
 }
 
@@ -242,7 +308,7 @@ export async function procesarTelegramTramitador(db, payload, botToken, apiKey) 
 
   if (tramiteCompleto) {
     await db.actualizarStatusOrden(placa, 'TRAMITE_COMPLETO');
-    await db.crearNotificacion(placa, 'TRAMITE_COMPLETO', `Trámite completado, generando certificado (reportado por ${userName})`);
+    await db.crearNotificacion(placa, 'TRAMITE_COMPLETO', `Trámite completado (reportado por ${userName})`);
     try {
       const { validacion } = await validarOrden(db, apiKey, placa);
       await db.crearNotificacion(placa, 'CERTIFICADO_VALIDACION', validacion);
@@ -250,14 +316,16 @@ export async function procesarTelegramTramitador(db, payload, botToken, apiKey) 
       logger.error('Error disparando validación de certificado', { placa, error: error.message });
     }
     try {
+      const revisiones = await db.obtenerRevisionesPorPlaca(placa);
       const { url } = await generarCertificado(placa, db);
       await db.crearNotificacion(placa, 'CERTIFICADO_GENERADO', `Certificado generado: ${url}`);
+      const criticos = revisiones.filter((r) => /^MAL/.test(r.respuesta || '')).length;
+      await notificarAprobacionAdmin(placa, url, orden, { criticos });
     } catch (error) {
       logger.error('Error generando certificado (servicio full)', { placa, error: error.message });
     }
   }
 
   await enviarMensajeTelegram(botToken, chatId, respuesta);
-
   logger.success('Processor response sent', { placa, tramiteCompleto });
 }
