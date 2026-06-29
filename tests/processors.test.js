@@ -100,7 +100,7 @@ const mensajeTelegram = (texto, { chatId = 1, fromId = 100, firstName = 'Beto' }
 });
 
 const mensajeWhatsapp = (texto, { from = '50212345678' } = {}) => ({
-  entry: [{ changes: [{ value: { messages: [{ from, text: { body: texto } }] } }] }],
+  entry: [{ changes: [{ value: { messages: [{ from, type: 'text', text: { body: texto } }] } }] }],
 });
 
 function textResponse(texto) {
@@ -287,6 +287,7 @@ test('procesarTelegramTramitador: descarta actualizaciones con área o estado in
 test('procesarWhatsapp: cliente y placa nuevos crean cliente, orden y guardan la conversación', async () => {
   const { server, url } = await crearServidorClaudeFake(() => textResponse('¡Hola! Vamos a certificar tu vehículo.'));
   process.env.ANTHROPIC_API_URL = url;
+  process.env.WHATSAPP_GRAPH_API_URL = url; // redirect outbound send to fake server
 
   const db = crearDbFake();
   await procesarWhatsapp(db, mensajeWhatsapp('Hola, quiero certificar mi placa P111AAA', { from: '50299999999' }), 'fake-key');
@@ -298,11 +299,13 @@ test('procesarWhatsapp: cliente y placa nuevos crean cliente, orden y guardan la
 
   server.close();
   delete process.env.ANTHROPIC_API_URL;
+  delete process.env.WHATSAPP_GRAPH_API_URL;
 });
 
 test('procesarWhatsapp: sin placa en el mensaje no crea orden ni guarda conversación', async () => {
   const { server, url } = await crearServidorClaudeFake(() => textResponse('¿Cuál es la placa de tu vehículo?'));
   process.env.ANTHROPIC_API_URL = url;
+  process.env.WHATSAPP_GRAPH_API_URL = url; // redirect outbound send to fake server
 
   const db = crearDbFake();
   const ordenesAntes = Object.keys(db._ordenes).length;
@@ -314,4 +317,5 @@ test('procesarWhatsapp: sin placa en el mensaje no crea orden ni guarda conversa
 
   server.close();
   delete process.env.ANTHROPIC_API_URL;
+  delete process.env.WHATSAPP_GRAPH_API_URL;
 });

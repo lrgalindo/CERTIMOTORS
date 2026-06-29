@@ -140,8 +140,9 @@ export async function procesarWhatsapp(db, payload, apiKey) {
     await db.guardarConversacion(placa, cliente.id, 'CLIENTE', textoCliente, respuesta);
   }
 
+  const graphBase = process.env.WHATSAPP_GRAPH_API_URL || 'https://graph.facebook.com';
   await axios.post(
-    `https://graph.facebook.com/v18.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+    `${graphBase}/v18.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
     {
       messaging_product: 'whatsapp',
       to: numeroCliente,
