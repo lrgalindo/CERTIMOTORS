@@ -3,6 +3,7 @@ export const TASK_TYPES = {
   CONVERSACION: 'conversacion',
   EXTRACCION: 'extraccion',
   RAZONAMIENTO_PROFUNDO: 'razonamiento_profundo',
+  CERTIFICADO: 'certificado',
 };
 
 export const ROLE_TASK_TYPE = {
@@ -11,6 +12,7 @@ export const ROLE_TASK_TYPE = {
   tramitador: TASK_TYPES.CONVERSACION,
   validator: TASK_TYPES.RAZONAMIENTO_PROFUNDO,
   reporter: TASK_TYPES.RAZONAMIENTO_PROFUNDO,
+  certificado: TASK_TYPES.CERTIFICADO,
 };
 
 const MODEL_BY_TASK_TYPE = {
@@ -18,6 +20,7 @@ const MODEL_BY_TASK_TYPE = {
   [TASK_TYPES.CONVERSACION]: 'claude-sonnet-4-6',
   [TASK_TYPES.EXTRACCION]: 'claude-sonnet-4-6',
   [TASK_TYPES.RAZONAMIENTO_PROFUNDO]: 'claude-opus-4-8',
+  [TASK_TYPES.CERTIFICADO]: 'claude-haiku-4-5',
 };
 
 // USD por millón de tokens. Cache write: 1.25x (TTL 5m) / 2x (TTL 1h) del precio de input.
@@ -33,6 +36,7 @@ const MAX_TOKENS_BY_TASK_TYPE = {
   [TASK_TYPES.CONVERSACION]: 1024,
   [TASK_TYPES.EXTRACCION]: 1024,
   [TASK_TYPES.RAZONAMIENTO_PROFUNDO]: 2048,
+  [TASK_TYPES.CERTIFICADO]: 4096,
 };
 
 export function seleccionarModelo(tipoTarea) {
