@@ -295,8 +295,34 @@ export async function obtenerEstadisticas() {
   };
 }
 
+export async function guardarTokenAprobacion(placa, token) {
+  const { error } = await supabase
+    .from('tokens_aprobacion')
+    .insert([{ token, placa, usado: false }]);
+  if (error) throw new Error(`Error guardando token de aprobación: ${error.message}`);
+}
+
+export async function obtenerPlacaPorToken(token) {
+  const { data, error } = await supabase
+    .from('tokens_aprobacion')
+    .select('placa')
+    .eq('token', token)
+    .eq('usado', false)
+    .single();
+  if (error && error.code !== 'PGRST116') throw error;
+  return data?.placa || null;
+}
+
+export async function marcarTokenUsado(token) {
+  const { error } = await supabase
+    .from('tokens_aprobacion')
+    .update({ usado: true })
+    .eq('token', token);
+  if (error) throw new Error(`Error marcando token como usado: ${error.message}`);
+}
+
 export async function obtenerStatsReporte() {
-  const hoyISO = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const hoyISO = new Date().toISOString().slice(0, 10);
 
   const [ordenesHoyRes, completadasHoyRes, estancadasRes, gastoHoyRes] = await Promise.all([
     supabase.from('ordenes').select('id', { count: 'exact', head: true }).gte('created_at', hoyISO),
@@ -394,6 +420,9 @@ export default {
   registrarCostoAPI,
   obtenerGastoDesde,
   obtenerEstadisticas,
+  guardarTokenAprobacion,
+  obtenerPlacaPorToken,
+  marcarTokenUsado,
   obtenerStatsReporte,
   encolarJob,
   reclamarJobsPendientes,
