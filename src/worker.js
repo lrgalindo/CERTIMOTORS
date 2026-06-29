@@ -1,6 +1,7 @@
 import * as db from './db.js';
 import { logger } from './logger.js';
 import { procesarWhatsapp, procesarTelegramMecanico, procesarTelegramTramitador } from './processors.js';
+import { procesarCallbackAdmin } from './pdf-approval.js';
 import { QUEUE_CONCURRENCY, QUEUE_POLL_INTERVAL_MS, calcularProximoIntento } from './queue.js';
 
 const CONFIG = {
@@ -15,6 +16,8 @@ const PROCESADORES = {
     procesarTelegramMecanico(db, payload, CONFIG.TELEGRAM_MECANICO_BOT_TOKEN, CONFIG.ANTHROPIC_API_KEY),
   telegram_tramitador: (payload) =>
     procesarTelegramTramitador(db, payload, CONFIG.TELEGRAM_TRAMITADOR_BOT_TOKEN, CONFIG.ANTHROPIC_API_KEY),
+  telegram_admin_callback: (payload) =>
+    procesarCallbackAdmin(db, payload, CONFIG.TELEGRAM_MECANICO_BOT_TOKEN),
 };
 
 export async function procesarJob({ db: dbDep, procesadores }, job) {

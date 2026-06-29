@@ -136,7 +136,8 @@ app.post('/webhook/telegram/mecanico', async (req, res) => {
     const externalId = req.body?.update_id;
     if (externalId === undefined) return res.status(200).json({ ok: true });
 
-    await db.encolarJob('telegram_mecanico', String(externalId), req.body);
+    const proveedor = req.body?.callback_query ? 'telegram_admin_callback' : 'telegram_mecanico';
+    await db.encolarJob(proveedor, String(externalId), req.body);
     res.status(200).json({ ok: true });
   } catch (error) {
     METRICS.totalErrors++;
@@ -196,11 +197,15 @@ app.post('/api/validar-orden', async (req, res) => {
 
 app.post('/api/reporte-diario', async (req, res) => {
   try {
-    const stats = await db.obtenerEstadisticas();
-    const presupuesto = await verificarPresupuesto(db);
+    const [stats, statsReporte, presupuesto] = await Promise.all([
+      db.obtenerEstadisticas(),
+      db.obtenerStatsReporte(),
+      verificarPresupuesto(db),
+    ]);
 
     const statsConCosto = {
       ...stats,
+      ...statsReporte,
       gasto_mensual_usd: Number(presupuesto.gastoMensual.toFixed(2)),
       presupuesto_limite_usd: presupuesto.limite,
       presupuesto_porcentaje: Math.round(presupuesto.porcentaje * 100),
