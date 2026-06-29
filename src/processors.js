@@ -1,3 +1,4 @@
+import axios from 'axios';
 import { prompts } from './prompts.js';
 import { logger } from './logger.js';
 import { validatePlaca, validatePhoneNumber, validateMessage } from './validators.js';
@@ -89,13 +90,22 @@ export async function procesarWhatsapp(db, payload, apiKey) {
     await db.guardarConversacion(placa, cliente.id, 'CLIENTE', textoCliente, respuesta);
   }
 
-  // Gap conocido (pre-existente): no hay integración de envío saliente de WhatsApp
-  // (Graph API send-message). El webhook ya respondió 200 antes de este punto, así
-  // que esta respuesta no llega al cliente hasta que se implemente el envío saliente.
-  logger.warn('Respuesta de Claude generada pero no enviada a WhatsApp (envío saliente no implementado)', {
-    placa,
-    respuesta: respuesta.substring(0, 50),
-  });
+  await axios.post(
+    `https://graph.facebook.com/v18.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+    {
+      messaging_product: 'whatsapp',
+      to: numeroCliente,
+      type: 'text',
+      text: { body: respuesta },
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+  logger.success('Respuesta enviada al cliente por WhatsApp', { numeroCliente });
 }
 
 export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
