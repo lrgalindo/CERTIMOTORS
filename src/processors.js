@@ -146,7 +146,7 @@ export async function procesarTelegramTramitador(db, payload, botToken, apiKey) 
     return;
   }
 
-  const cliente = await db.obtenerClientePorNumero(orden.cliente_id);
+  const cliente = await db.obtenerClientePorId(orden.cliente_id);
   const etapa = orden.status;
 
   const systemPrompt = prompts.construirSystemPromptTramitador(placa, cliente, etapa, { SAT: 'Pendiente' });
