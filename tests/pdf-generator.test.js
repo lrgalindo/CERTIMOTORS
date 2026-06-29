@@ -1,45 +1,35 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generarCertificadoPDF } from '../src/pdf-generator.js';
+import { generarCertificado } from '../src/pdf-generator.js';
 
-const hallazgosMock = [
-  { punto: 1, nombre_punto: 'Motor', estado: 'BIEN' },
-  { punto: 2, nombre_punto: 'Frenos', estado: 'MAL', observacion: 'Pastillas gastadas' },
-  { punto: 3, nombre_punto: 'Suspensión', estado: 'REGULAR' },
-];
+// generarCertificado(placa, db) is async, calls Claude + PDFKit + Supabase Storage.
+// We test the contract boundaries (export shape, early error paths) without
+// a real DB or network — full PDF generation is covered by manual / e2e tests.
 
-test('generarCertificadoPDF: retorna un Buffer no vacío', () => {
-  const result = generarCertificadoPDF('P926FTB', hallazgosMock);
-  assert.ok(result instanceof Buffer, 'debe retornar un Buffer');
-  assert.ok(result.length > 0, 'el Buffer no debe estar vacío');
+test('generarCertificado: la función está exportada y es asíncrona', () => {
+  assert.equal(typeof generarCertificado, 'function');
+  // AsyncFunction has a constructor name of 'AsyncFunction'
+  assert.equal(generarCertificado.constructor.name, 'AsyncFunction');
 });
 
-test('generarCertificadoPDF: el Buffer contiene la placa y los hallazgos', () => {
-  const result = generarCertificadoPDF('P926FTB', hallazgosMock);
-  const contenido = result.toString('utf8');
-  assert.ok(contenido.includes('P926FTB'), 'debe incluir la placa');
-  assert.ok(contenido.includes('Motor'), 'debe incluir nombre del punto 1');
-  assert.ok(contenido.includes('Pastillas gastadas'), 'debe incluir observación del punto 2');
-  assert.ok(contenido.includes('MAL'), 'debe incluir el estado MAL');
-});
+test('generarCertificado: lanza AppError 404 si la orden no existe', async () => {
+  const db = {
+    obtenerOrdenPorPlaca: async () => null,
+    obtenerRevisionesPorPlaca: async () => [],
+    obtenerNotificacionesPorPlacaYTipos: async () => [],
+    obtenerGastoDesde: async () => [],
+    registrarCostoAPI: async () => {},
+    asegurarBucketCertificados: async () => {},
+    subirCertificado: async () => 'http://fake.url/cert.pdf',
+    guardarCertificado: async () => {},
+  };
 
-test('generarCertificadoPDF: lanza AppError 422 cuando hallazgos está vacío', () => {
-  assert.throws(() => generarCertificadoPDF('P926FTB', []), (err) => {
-    assert.equal(err.statusCode, 422);
-    assert.ok(err.message.includes('P926FTB'));
-    return true;
-  });
-});
-
-test('generarCertificadoPDF: lanza AppError 422 cuando hallazgos es null', () => {
-  assert.throws(() => generarCertificadoPDF('P926FTB', null), (err) => {
-    assert.equal(err.statusCode, 422);
-    return true;
-  });
-});
-
-test('generarCertificadoPDF: incluye todos los hallazgos en el Buffer', () => {
-  const result = generarCertificadoPDF('P926FTB', hallazgosMock);
-  const contenido = result.toString('utf8');
-  assert.ok(contenido.includes('Total puntos inspeccionados: 3'));
+  await assert.rejects(
+    () => generarCertificado('P926FTB', db),
+    (err) => {
+      assert.equal(err.statusCode, 404);
+      assert.ok(err.message.toLowerCase().includes('orden'));
+      return true;
+    }
+  );
 });

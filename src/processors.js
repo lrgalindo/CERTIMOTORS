@@ -253,11 +253,13 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
 
 export async function procesarTelegramTramitador(db, payload, botToken, apiKey) {
   const { message } = payload;
-  if (!message || !message.text) return;
+  const hasPhoto = Boolean(message?.photo?.length);
+  const hasText = Boolean(message?.text);
+  if (!message || (!hasText && !hasPhoto)) return;
 
   const chatId = message.chat.id;
   const telegram_id = message.from.id;
-  const texto = message.text;
+  const texto = message.text || message.caption || (hasPhoto ? 'Foto de documento' : '');
   const userName = message.from?.first_name || 'Tramitador';
 
   logger.info(`Processor: ${userName} (${telegram_id})`, { text: texto.substring(0, 50) });

@@ -184,9 +184,9 @@ test('procesarTelegramMecanico: degradación graceful si falla descarga de image
 test('procesarTelegramTramitador: photo[] con caption que incluye placa se procesa sin error', async () => {
   const { server, url } = await crearServidorClaudeFake(() =>
     toolUseResponse('registrar_avance_tramite', {
-      actualizaciones: [{ area: 'DOCUMENTOS', estado: 'COMPLETADO' }],
+      actualizaciones: [{ area: 'IMPUESTO_CIRCULACION', estado: 'SOLVENTE', detalle: 'Documentos completos' }],
       tramite_completo: false,
-      respuesta_tramitador: 'Foto recibida, documentos anotados.',
+      respuesta_tramitador: 'Foto recibida, impuesto solvente anotado.',
     })
   );
   process.env.ANTHROPIC_API_URL = url;
@@ -201,7 +201,7 @@ test('procesarTelegramTramitador: photo[] con caption que incluye placa se proce
     )
   );
   assert.equal(db._notificaciones.length, 1);
-  assert.equal(db._notificaciones[0].tipo, 'DOCUMENTOS');
+  assert.equal(db._notificaciones[0].tipo, 'IMPUESTO_CIRCULACION');
 
   server.close();
   delete process.env.ANTHROPIC_API_URL;
@@ -214,6 +214,7 @@ test('procesarWhatsapp: mensaje con image (sin text) crea cliente y llama a Clau
     textResponse('Recibí tu imagen. ¿Cuál es la placa de tu vehículo?')
   );
   process.env.ANTHROPIC_API_URL = url;
+  process.env.WHATSAPP_GRAPH_API_URL = url; // redirect outbound send to fake server
 
   const db = crearDbFake();
   await assert.doesNotReject(() =>
@@ -226,6 +227,7 @@ test('procesarWhatsapp: mensaje con image (sin text) crea cliente y llama a Clau
 
   server.close();
   delete process.env.ANTHROPIC_API_URL;
+  delete process.env.WHATSAPP_GRAPH_API_URL;
 });
 
 test('procesarWhatsapp: mensaje sin text ni image retorna sin procesar', async () => {

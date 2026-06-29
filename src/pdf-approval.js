@@ -1,5 +1,7 @@
+import crypto from 'crypto';
 import axios from 'axios';
 import { logger } from './logger.js';
+import { AppError } from './errors.js';
 
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '8289807493';
 
@@ -159,4 +161,39 @@ async function enviarPdfWhatsapp(db, placa, orden) {
     { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
   );
   logger.success('PDF enviado al cliente por WhatsApp', { placa, numero: cliente.numero_telefono });
+}
+
+// ─── Token-based approval API ────────────────────────────────────────────────
+// Provides a DB-centric approval flow that doesn't depend on Telegram inline
+// keyboards: generate a one-time token, store it, later exchange it for an
+// approval or correction action. Complements the Telegram keyboard flow.
+
+export async function notificarAdminParaAprobacion(db, placa, pdfBuffer) {
+  if (!pdfBuffer || pdfBuffer.length === 0) {
+    throw new AppError(`PDF vacío para placa ${placa}`, 422);
+  }
+  const token = crypto.randomBytes(24).toString('hex');
+  await db.guardarTokenAprobacion(placa, token);
+  await db.crearNotificacion(placa, 'APROBACION_PENDIENTE', `Token de aprobación generado: ${token.slice(0, 8)}...`);
+  logger.info('Token de aprobación generado', { placa });
+  return { token, placa };
+}
+
+export async function procesarCallbackAprobacion(db, token) {
+  const placa = await db.obtenerPlacaPorToken(token);
+  if (!placa) throw new AppError('Token inválido o ya utilizado', 401);
+  await db.actualizarStatusOrden(placa, 'CERTIFICADO_APROBADO');
+  await db.crearNotificacion(placa, 'CERTIFICADO_APROBADO', 'Aprobado por administrador vía token');
+  await db.marcarTokenUsado(token);
+  logger.success('Certificado aprobado vía token', { placa });
+  return { status: 'APROBADO', placa };
+}
+
+export async function procesarCallbackCorreccion(db, token, notas = '') {
+  const placa = await db.obtenerPlacaPorToken(token);
+  if (!placa) throw new AppError('Token inválido o ya utilizado', 401);
+  await db.actualizarStatusOrden(placa, 'NECESITA_CORRECCION');
+  await db.crearNotificacion(placa, 'NECESITA_CORRECCION', notas);
+  logger.info('Corrección solicitada vía token', { placa });
+  return { status: 'NECESITA_CORRECCION', placa };
 }
