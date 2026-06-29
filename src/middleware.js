@@ -1,5 +1,5 @@
 import rateLimit from 'express-rate-limit';
-import logger from './logger.js';
+import { logger } from './logger.js';
 
 // Rate limiter: 100 requests por 15 minutos
 export const apiLimiter = rateLimit({
