@@ -15,6 +15,7 @@ import { verificarFirmaWhatsapp, verificarSecretoTelegram } from './webhook-secu
 import { validarOrden } from './validar-orden.js';
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(
   express.json({
     verify: (req, res, buf) => {
