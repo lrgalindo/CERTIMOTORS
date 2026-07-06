@@ -11,7 +11,8 @@ import { llamarClaudeAPI } from './claude-client.js';
 import { verificarPresupuesto } from './budget-tracker.js';
 import { iniciarWorker } from './worker.js';
 import { registrarWebhookTelegram } from './telegram-client.js';
-import { verificarFirmaWhatsapp, verificarSecretoTelegram } from './webhook-security.js';
+import { verificarFirmaWhatsapp, verificarSecretoTelegram, verificarFirmaRecurrente } from './webhook-security.js';
+import { procesarPagoRecurrente } from './processors.js';
 import { validarOrden } from './validar-orden.js';
 
 const app = express();
@@ -170,6 +171,36 @@ app.post('/webhook/telegram/tramitador', async (req, res) => {
     METRICS.totalErrors++;
     logger.error('Telegram processor webhook error', { error: error.message });
     res.status(200).json({ ok: true });
+  }
+});
+
+// Confirmación de pago de Recurrente. Se procesa inline (sin cola): es una
+// actualización liviana de DB y Recurrente reintenta solo si respondemos non-2xx.
+app.post('/webhook/recurrente', async (req, res) => {
+  METRICS.totalRequests++;
+
+  const firmaValida = verificarFirmaRecurrente(
+    req.rawBody,
+    {
+      id: req.get('svix-id'),
+      timestamp: req.get('svix-timestamp'),
+      signature: req.get('svix-signature'),
+    },
+    process.env.RECURRENTE_WEBHOOK_SECRET
+  );
+  if (!firmaValida) {
+    METRICS.totalErrors++;
+    logger.error('Recurrente webhook: firma inválida', { ip: req.ip });
+    return res.status(401).json({ error: 'Firma inválida' });
+  }
+
+  try {
+    await procesarPagoRecurrente(db, req.body);
+    res.status(200).json({ ok: true });
+  } catch (error) {
+    METRICS.totalErrors++;
+    logger.error('Recurrente webhook error', { error: error.message });
+    res.status(500).json({ error: 'Error procesando pago' });
   }
 });
 

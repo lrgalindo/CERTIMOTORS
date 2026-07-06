@@ -27,6 +27,35 @@ export function verificarFirmaWhatsapp(rawBody, signatureHeader, appSecret) {
   return crypto.timingSafeEqual(bufEsperada, bufRecibida);
 }
 
+let avisoRecurrenteSinSecreto = false;
+
+// Recurrente firma sus webhooks con el estándar Svix: HMAC-SHA256 en base64
+// sobre "{svix-id}.{svix-timestamp}.{body}", con clave = base64 del secreto
+// tras el prefijo "whsec_". El header svix-signature puede traer varias firmas
+// "v1,<base64>" separadas por espacio; basta que una coincida.
+export function verificarFirmaRecurrente(rawBody, { id, timestamp, signature }, secreto) {
+  if (!secreto) {
+    if (!avisoRecurrenteSinSecreto) {
+      logger.warn('RECURRENTE_WEBHOOK_SECRET no configurado: firma de webhook sin verificar');
+      avisoRecurrenteSinSecreto = true;
+    }
+    return true;
+  }
+
+  if (!id || !timestamp || !signature) return false;
+
+  const clave = Buffer.from(secreto.replace(/^whsec_/, ''), 'base64');
+  const esperada = crypto.createHmac('sha256', clave).update(`${id}.${timestamp}.${rawBody}`).digest('base64');
+  const bufEsperada = Buffer.from(esperada);
+
+  return signature.split(' ').some((parte) => {
+    const [version, firma] = parte.split(',');
+    if (version !== 'v1' || !firma) return false;
+    const bufFirma = Buffer.from(firma);
+    return bufFirma.length === bufEsperada.length && crypto.timingSafeEqual(bufFirma, bufEsperada);
+  });
+}
+
 // Telegram no firma el body; en su lugar, setWebhook acepta un secret_token que
 // luego reenvía en el header X-Telegram-Bot-Api-Secret-Token en cada update.
 export function verificarSecretoTelegram(secretHeader, secretoEsperado) {
