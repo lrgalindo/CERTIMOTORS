@@ -27,22 +27,26 @@ export function verificarFirmaWhatsapp(rawBody, signatureHeader, appSecret) {
   return crypto.timingSafeEqual(bufEsperada, bufRecibida);
 }
 
-let avisoRecurrenteSinSecreto = false;
+const RECURRENTE_TOLERANCIA_SEGUNDOS = 300;
 
 // Recurrente firma sus webhooks con el estándar Svix: HMAC-SHA256 en base64
 // sobre "{svix-id}.{svix-timestamp}.{body}", con clave = base64 del secreto
 // tras el prefijo "whsec_". El header svix-signature puede traer varias firmas
 // "v1,<base64>" separadas por espacio; basta que una coincida.
+// A diferencia de los otros webhooks, aquí NO hay modo dev sin secreto: este
+// endpoint confirma pagos — sin secreto configurado se rechaza todo (fail closed).
 export function verificarFirmaRecurrente(rawBody, { id, timestamp, signature }, secreto) {
   if (!secreto) {
-    if (!avisoRecurrenteSinSecreto) {
-      logger.warn('RECURRENTE_WEBHOOK_SECRET no configurado: firma de webhook sin verificar');
-      avisoRecurrenteSinSecreto = true;
-    }
-    return true;
+    logger.error('RECURRENTE_WEBHOOK_SECRET no configurado: webhook de pago rechazado');
+    return false;
   }
 
   if (!id || !timestamp || !signature) return false;
+
+  // Ventana anti-replay de 5 minutos (PAGO_CONFIRMADO es idempotente; un replay
+  // dentro de la ventana solo repetiría la notificación, no el cambio de estado).
+  const desfase = Math.abs(Date.now() / 1000 - Number(timestamp));
+  if (!Number.isFinite(desfase) || desfase > RECURRENTE_TOLERANCIA_SEGUNDOS) return false;
 
   const clave = Buffer.from(secreto.replace(/^whsec_/, ''), 'base64');
   const esperada = crypto.createHmac('sha256', clave).update(`${id}.${timestamp}.${rawBody}`).digest('base64');

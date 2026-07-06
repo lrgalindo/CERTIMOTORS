@@ -8,10 +8,11 @@ function firmarSvix(rawBody, id, timestamp, secreto) {
   return 'v1,' + crypto.createHmac('sha256', clave).update(`${id}.${timestamp}.${rawBody}`).digest('base64');
 }
 
-test('verificarFirmaRecurrente: acepta firma svix v1 correcta', () => {
+test('verificarFirmaRecurrente: acepta firma svix v1 correcta con timestamp fresco', () => {
   const secreto = 'whsec_' + Buffer.from('clave-de-prueba').toString('base64');
   const rawBody = Buffer.from(JSON.stringify({ event_type: 'payment_intent.succeeded' }));
-  const headers = { id: 'msg_1', timestamp: '1720000000', signature: firmarSvix(rawBody, 'msg_1', '1720000000', secreto) };
+  const ts = String(Math.floor(Date.now() / 1000));
+  const headers = { id: 'msg_1', timestamp: ts, signature: firmarSvix(rawBody, 'msg_1', ts, secreto) };
 
   assert.equal(verificarFirmaRecurrente(rawBody, headers, secreto), true);
 });
@@ -19,8 +20,9 @@ test('verificarFirmaRecurrente: acepta firma svix v1 correcta', () => {
 test('verificarFirmaRecurrente: acepta si alguna de varias firmas coincide', () => {
   const secreto = 'whsec_' + Buffer.from('clave-de-prueba').toString('base64');
   const rawBody = Buffer.from('{}');
-  const buena = firmarSvix(rawBody, 'msg_2', '1720000001', secreto);
-  const headers = { id: 'msg_2', timestamp: '1720000001', signature: `v1,ZmFsc2E= ${buena}` };
+  const ts = String(Math.floor(Date.now() / 1000));
+  const buena = firmarSvix(rawBody, 'msg_2', ts, secreto);
+  const headers = { id: 'msg_2', timestamp: ts, signature: `v1,ZmFsc2E= ${buena}` };
 
   assert.equal(verificarFirmaRecurrente(rawBody, headers, secreto), true);
 });
@@ -28,16 +30,23 @@ test('verificarFirmaRecurrente: acepta si alguna de varias firmas coincide', () 
 test('verificarFirmaRecurrente: rechaza firma incorrecta o headers faltantes', () => {
   const secreto = 'whsec_' + Buffer.from('clave-de-prueba').toString('base64');
   const rawBody = Buffer.from('{}');
+  const ts = String(Math.floor(Date.now() / 1000));
 
-  assert.equal(
-    verificarFirmaRecurrente(rawBody, { id: 'msg_3', timestamp: '1720000002', signature: 'v1,bm9wZQ==' }, secreto),
-    false
-  );
-  assert.equal(verificarFirmaRecurrente(rawBody, { id: 'msg_3', timestamp: '1720000002' }, secreto), false);
+  assert.equal(verificarFirmaRecurrente(rawBody, { id: 'msg_3', timestamp: ts, signature: 'v1,bm9wZQ==' }, secreto), false);
+  assert.equal(verificarFirmaRecurrente(rawBody, { id: 'msg_3', timestamp: ts }, secreto), false);
 });
 
-test('verificarFirmaRecurrente: sin secreto configurado, deja pasar (modo dev)', () => {
-  assert.equal(verificarFirmaRecurrente(Buffer.from('{}'), {}, undefined), true);
+test('verificarFirmaRecurrente: rechaza timestamp fuera de la ventana anti-replay', () => {
+  const secreto = 'whsec_' + Buffer.from('clave-de-prueba').toString('base64');
+  const rawBody = Buffer.from('{}');
+  const tsViejo = String(Math.floor(Date.now() / 1000) - 600); // 10 min atrás
+  const headers = { id: 'msg_4', timestamp: tsViejo, signature: firmarSvix(rawBody, 'msg_4', tsViejo, secreto) };
+
+  assert.equal(verificarFirmaRecurrente(rawBody, headers, secreto), false);
+});
+
+test('verificarFirmaRecurrente: sin secreto configurado rechaza (fail closed — endpoint de pago)', () => {
+  assert.equal(verificarFirmaRecurrente(Buffer.from('{}'), {}, undefined), false);
 });
 
 test('verificarFirmaWhatsapp: acepta firma HMAC SHA-256 correcta', () => {
