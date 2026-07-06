@@ -133,6 +133,30 @@ async function guardarConversacionSegura(db, placa, clienteId, entrada, respuest
   }
 }
 
+// Escalación a humano: avisa al admin por Telegram con el contexto mínimo para
+// retomar la conversación. Best-effort: nunca rompe la respuesta al cliente.
+// `ultimosMensajes` son filas de obtenerConversacionesPorCliente (desc).
+export async function enviarEscalacionAdmin(numeroCliente, ultimosMensajes = [], placa = null) {
+  try {
+    const contexto = ultimosMensajes
+      .slice(0, 3)
+      .reverse()
+      .map((c) => `Cliente: ${c.mensaje_entrada}\nAsesor: ${c.respuesta_ia}`)
+      .join('\n');
+    const texto =
+      `🙋 Cliente pide hablar con un humano\n\n` +
+      `Número: +${numeroCliente}\n` +
+      (placa ? `Placa: ${placa}\n` : '') +
+      (contexto ? `\nÚltimos mensajes:\n${contexto}` : '\n(Sin historial previo)');
+    // enviarMensajeTelegram usa parse_mode HTML: escapar el texto del cliente
+    // para que un "<" en su mensaje no invalide la alerta de escalación.
+    const textoSeguro = texto.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    await enviarMensajeTelegram(process.env.TELEGRAM_MECANICO_BOT_TOKEN, ADMIN_CHAT_ID, textoSeguro);
+  } catch (error) {
+    logger.error('No se pudo enviar la escalación al admin', { numeroCliente, error: error.message });
+  }
+}
+
 // Aviso de hito al cliente por WhatsApp. Best-effort: si falla la búsqueda del
 // cliente o el envío, se loggea y el flujo sigue — nunca rompe el job.
 async function notificarHitoCliente(db, clienteId, placa, mensaje) {
@@ -297,7 +321,8 @@ export async function procesarWhatsapp(db, payload, apiKey) {
   }
 
   if (escalar) {
-    // ponytail: bloque 3 conecta enviarEscalacionAdmin; por ahora queda registrado.
+    const historialEscalacion = await db.obtenerConversacionesPorCliente(cliente.id, 3);
+    await enviarEscalacionAdmin(numeroCliente, historialEscalacion, placa);
     logger.warn('Agente solicitó escalación a humano', { numeroCliente, placa });
   }
 
