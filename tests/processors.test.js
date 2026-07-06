@@ -459,6 +459,103 @@ test('procesarPagoRecurrente: marca PAGO_CONFIRMADO y registra notificación', a
   assert.ok(db._notificaciones.some((n) => n.tipo === 'PAGO_CONFIRMADO'));
 });
 
+// ─── Bloque 3a: notificaciones de hito al cliente ────────────────────────────
+
+const clienteConTelefono = async () => ({ id: 'cliente-1', nombre: 'Juan Pérez', numero_telefono: '50212345678' });
+
+test('procesarTelegramMecanico: INSPECCION_COMPLETA avisa al cliente por WhatsApp', async () => {
+  const enviados = [];
+  const { server, url } = await crearServidorClaudeFake((body) => {
+    if (body.messaging_product) {
+      enviados.push(body);
+      return { ok: true };
+    }
+    return toolUseResponse('registrar_inspeccion', {
+      hallazgos: [],
+      inspeccion_completa: true,
+      respuesta_mecanico: 'Inspección completa.',
+    });
+  });
+  process.env.ANTHROPIC_API_URL = url;
+  process.env.WHATSAPP_GRAPH_API_URL = url;
+
+  const db = crearDbFake({ obtenerClientePorId: clienteConTelefono });
+  await procesarTelegramMecanico(db, mensajeTelegram('placa P926FTB ya terminé toda la inspección'), undefined, 'fake-key');
+
+  assert.equal(enviados.length, 1);
+  assert.equal(enviados[0].to, '50212345678');
+  assert.equal(enviados[0].text.body, 'Tu inspección de P926FTB está lista. Estamos preparando tu certificado.');
+
+  server.close();
+  delete process.env.ANTHROPIC_API_URL;
+  delete process.env.WHATSAPP_GRAPH_API_URL;
+});
+
+test('procesarTelegramTramitador: TRAMITE_COMPLETO con FULL avisa al cliente, con BASICO no', async () => {
+  for (const [servicio, esperados] of [['FULL', 1], ['BASICO', 0]]) {
+    const enviados = [];
+    const { server, url } = await crearServidorClaudeFake((body) => {
+      if (body.messaging_product) {
+        enviados.push(body);
+        return { ok: true };
+      }
+      if (body.tools) {
+        return toolUseResponse('registrar_avance_tramite', {
+          actualizaciones: [],
+          tramite_completo: true,
+          respuesta_tramitador: 'Listo.',
+        });
+      }
+      return textResponse('✅ APROBADO PARA CERTIFICADO');
+    });
+    process.env.ANTHROPIC_API_URL = url;
+    process.env.WHATSAPP_GRAPH_API_URL = url;
+
+    const db = crearDbFake({ obtenerClientePorId: clienteConTelefono });
+    db._ordenes.P926FTB.servicio = servicio;
+    await procesarTelegramTramitador(db, mensajeTelegram('placa P926FTB trámite terminado'), undefined, 'fake-key');
+
+    assert.equal(enviados.length, esperados, `servicio ${servicio}: esperaba ${esperados} envío(s) WhatsApp`);
+    if (esperados === 1) {
+      assert.equal(
+        enviados[0].text.body,
+        'Las verificaciones legales de P926FTB están listas. Generando tu certificado completo.'
+      );
+    }
+
+    server.close();
+    delete process.env.ANTHROPIC_API_URL;
+    delete process.env.WHATSAPP_GRAPH_API_URL;
+  }
+});
+
+test('procesarTelegramMecanico: no re-avisa al cliente si la orden ya estaba INSPECCION_COMPLETA', async () => {
+  const enviados = [];
+  const { server, url } = await crearServidorClaudeFake((body) => {
+    if (body.messaging_product) {
+      enviados.push(body);
+      return { ok: true };
+    }
+    return toolUseResponse('registrar_inspeccion', {
+      hallazgos: [],
+      inspeccion_completa: true,
+      respuesta_mecanico: 'Ya estaba completa.',
+    });
+  });
+  process.env.ANTHROPIC_API_URL = url;
+  process.env.WHATSAPP_GRAPH_API_URL = url;
+
+  const db = crearDbFake({ obtenerClientePorId: clienteConTelefono });
+  db._ordenes.P926FTB.status = 'INSPECCION_COMPLETA';
+  await procesarTelegramMecanico(db, mensajeTelegram('placa P926FTB ya terminé toda la inspección'), undefined, 'fake-key');
+
+  assert.equal(enviados.length, 0);
+
+  server.close();
+  delete process.env.ANTHROPIC_API_URL;
+  delete process.env.WHATSAPP_GRAPH_API_URL;
+});
+
 test('procesarPagoRecurrente: ignora eventos que no son pago exitoso', async () => {
   const { procesarPagoRecurrente } = await import('../src/processors.js');
   const db = crearDbFake();

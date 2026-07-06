@@ -1,7 +1,9 @@
+import axios from 'axios';
 import * as db from './db.js';
 import { logger } from './logger.js';
 import { procesarWhatsapp, procesarTelegramMecanico, procesarTelegramTramitador } from './processors.js';
-import { procesarCallbackAdmin } from './pdf-approval.js';
+import { procesarCallbackAdmin, ADMIN_CHAT_ID } from './pdf-approval.js';
+import { enviarMensajeTelegram } from './telegram-client.js';
 import { QUEUE_CONCURRENCY, QUEUE_POLL_INTERVAL_MS, calcularProximoIntento } from './queue.js';
 
 const CONFIG = {
@@ -39,10 +41,12 @@ export async function procesarJob({ db: dbDep, procesadores }, job) {
     await dbDep.marcarJobCompletado(job.id);
   } catch (error) {
     const intentos = job.intentos + 1;
+    const permanente = intentos >= job.max_intentos;
     logger.error('Job de cola falló', {
       jobId: job.id,
       proveedor: job.proveedor,
       intentos,
+      permanente,
       error: error.message,
     });
     await dbDep.marcarJobFallido(job.id, {
@@ -51,6 +55,44 @@ export async function procesarJob({ db: dbDep, procesadores }, job) {
       error: error.message,
       proximoIntentoEn: calcularProximoIntento(intentos),
     });
+
+    if (permanente && job.proveedor === 'whatsapp') {
+      const numero = claveCliente(job).split(':')[1];
+      if (numero) {
+        // Aviso al cliente: best-effort, no bloquea ni propaga error.
+        try {
+          const graphBase = process.env.WHATSAPP_GRAPH_API_URL || 'https://graph.facebook.com';
+          await axios.post(
+            `${graphBase}/v18.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+            {
+              messaging_product: 'whatsapp',
+              to: numero,
+              type: 'text',
+              text: { body: 'Estamos teniendo dificultades técnicas, te contactamos en menos de una hora.' },
+            },
+            {
+              headers: {
+                Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+                'Content-Type': 'application/json',
+              },
+            }
+          );
+        } catch (wa) {
+          logger.error('No se pudo avisar al cliente del fallo permanente', { numero, error: wa.message });
+        }
+      }
+
+      // Alerta al admin: best-effort.
+      try {
+        await enviarMensajeTelegram(
+          process.env.TELEGRAM_MECANICO_BOT_TOKEN,
+          ADMIN_CHAT_ID,
+          `⚠️ Job WhatsApp fallido permanente\n\nProveedor: ${job.proveedor}\nCliente: ${numero || 'desconocido'}\nError: ${error.message}`
+        );
+      } catch (tg) {
+        logger.error('No se pudo enviar alerta Telegram del fallo permanente', { error: tg.message });
+      }
+    }
   }
 }
 

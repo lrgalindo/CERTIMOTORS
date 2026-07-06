@@ -133,6 +133,43 @@ async function guardarConversacionSegura(db, placa, clienteId, entrada, respuest
   }
 }
 
+// Escalación a humano: avisa al admin por Telegram con el contexto mínimo para
+// retomar la conversación. Best-effort: nunca rompe la respuesta al cliente.
+// `ultimosMensajes` son filas de obtenerConversacionesPorCliente (desc).
+export async function enviarEscalacionAdmin(numeroCliente, ultimosMensajes = [], placa = null) {
+  try {
+    const contexto = ultimosMensajes
+      .slice(0, 3)
+      .reverse()
+      .map((c) => `Cliente: ${c.mensaje_entrada}\nAsesor: ${c.respuesta_ia}`)
+      .join('\n');
+    const texto =
+      `🙋 Cliente pide hablar con un humano\n\n` +
+      `Número: +${numeroCliente}\n` +
+      (placa ? `Placa: ${placa}\n` : '') +
+      (contexto ? `\nÚltimos mensajes:\n${contexto}` : '\n(Sin historial previo)');
+    // enviarMensajeTelegram usa parse_mode HTML: escapar el texto del cliente
+    // para que un "<" en su mensaje no invalide la alerta de escalación.
+    const textoSeguro = texto.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    await enviarMensajeTelegram(process.env.TELEGRAM_MECANICO_BOT_TOKEN, ADMIN_CHAT_ID, textoSeguro);
+  } catch (error) {
+    logger.error('No se pudo enviar la escalación al admin', { numeroCliente, error: error.message });
+  }
+}
+
+// Aviso de hito al cliente por WhatsApp. Best-effort: si falla la búsqueda del
+// cliente o el envío, se loggea y el flujo sigue — nunca rompe el job.
+async function notificarHitoCliente(db, clienteId, placa, mensaje) {
+  try {
+    const cliente = await db.obtenerClientePorId(clienteId);
+    if (!cliente?.numero_telefono) return;
+    await enviarWhatsapp(cliente.numero_telefono, mensajeTexto(mensaje));
+    logger.success('Hito notificado al cliente por WhatsApp', { placa });
+  } catch (error) {
+    logger.error('No se pudo notificar hito al cliente', { placa, error: error.message });
+  }
+}
+
 export async function crearCheckoutRecurrente(placa, servicio) {
   const svc = SERVICIOS[servicio];
   const secretKey = process.env.RECURRENTE_SECRET_KEY;
@@ -284,7 +321,8 @@ export async function procesarWhatsapp(db, payload, apiKey) {
   }
 
   if (escalar) {
-    // ponytail: bloque 3 conecta enviarEscalacionAdmin; por ahora queda registrado.
+    const historialEscalacion = await db.obtenerConversacionesPorCliente(cliente.id, 3);
+    await enviarEscalacionAdmin(numeroCliente, historialEscalacion, placa);
     logger.warn('Agente solicitó escalación a humano', { numeroCliente, placa });
   }
 
@@ -425,6 +463,17 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
     await db.actualizarStatusOrden(placa, 'INSPECCION_COMPLETA');
     await db.crearNotificacion(placa, 'INSPECCION_COMPLETA', `Inspección completada por ${userName}`);
 
+    // Idempotencia: `orden` trae el status previo a esta actualización; si ya
+    // estaba completa (reintento de job o mensaje repetido), no se re-avisa.
+    if (orden.status !== 'INSPECCION_COMPLETA') {
+      await notificarHitoCliente(
+        db,
+        orden.cliente_id,
+        placa,
+        `Tu inspección de ${placa} está lista. Estamos preparando tu certificado.`
+      );
+    }
+
     if (orden.servicio !== 'FULL') {
       try {
         const { url } = await generarCertificado(placa, db);
@@ -502,6 +551,17 @@ export async function procesarTelegramTramitador(db, payload, botToken, apiKey) 
   if (tramiteCompleto) {
     await db.actualizarStatusOrden(placa, 'TRAMITE_COMPLETO');
     await db.crearNotificacion(placa, 'TRAMITE_COMPLETO', `Trámite completado (reportado por ${userName})`);
+
+    // Solo el servicio FULL incluye verificaciones legales; mismo guard de
+    // idempotencia que en la inspección (status previo en `orden`).
+    if (orden.servicio === 'FULL' && orden.status !== 'TRAMITE_COMPLETO') {
+      await notificarHitoCliente(
+        db,
+        orden.cliente_id,
+        placa,
+        `Las verificaciones legales de ${placa} están listas. Generando tu certificado completo.`
+      );
+    }
     try {
       const { validacion } = await validarOrden(db, apiKey, placa);
       await db.crearNotificacion(placa, 'CERTIFICADO_VALIDACION', validacion);

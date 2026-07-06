@@ -131,11 +131,37 @@ async function manejarCorreccion(db, botToken, chatId, placa) {
   logger.info('Corrección solicitada por admin', { placa });
 }
 
+// Mapea el veredicto del validator (notificación CERTIFICADO_VALIDACION, ver
+// prompts.js: "✅ APROBADO PARA CERTIFICADO / ⚠️ APROBADO CON IMPEDIMENTO /
+// ❌ RECHAZADO") a un caption breve en tono de asesor. Sin veredicto → genérico.
+export function captionSegunVeredicto(veredicto, placa, nombreCliente = '') {
+  if (veredicto?.includes('APROBADO CON IMPEDIMENTO')) {
+    return `Tu certificado CERTIMOTORS de ${placa} está listo${nombreCliente}: aprobado con observaciones. El detalle viene dentro del documento.`;
+  }
+  if (veredicto?.includes('APROBADO PARA CERTIFICADO')) {
+    return `Tu certificado CERTIMOTORS de ${placa} está listo${nombreCliente}: inspección aprobada. Guardalo como respaldo de tu vehículo.`;
+  }
+  if (veredicto?.includes('RECHAZADO')) {
+    return `Tu informe CERTIMOTORS de ${placa} está listo${nombreCliente}. El vehículo no fue aprobado esta vez; el detalle está en el documento.`;
+  }
+  return `🎉 Tu certificado CERTIMOTORS está listo${nombreCliente}. Guárdalo como respaldo de la inspección de tu vehículo.`;
+}
+
 async function enviarPdfWhatsapp(db, placa, orden) {
   const cliente = await db.obtenerClientePorId(orden.cliente_id);
   if (!cliente?.numero_telefono) {
     logger.warn('Sin número de teléfono del cliente para enviar PDF', { placa });
     return;
+  }
+
+  // El caption confirma el veredicto si quedó registrado; si la lectura falla,
+  // se envía igual el PDF con el caption genérico.
+  let veredicto = null;
+  try {
+    const notifs = await db.obtenerNotificacionesPorPlacaYTipos(placa, ['CERTIFICADO_VALIDACION']);
+    veredicto = notifs[0]?.mensaje || null;
+  } catch (error) {
+    logger.warn('No se pudo leer el veredicto de validación para el caption', { placa, error: error.message });
   }
 
   const token = process.env.WHATSAPP_TOKEN;
@@ -155,7 +181,7 @@ async function enviarPdfWhatsapp(db, placa, orden) {
       document: {
         link: orden.certificado_url,
         filename: `Certificado_${placa}_CERTIMOTORS.pdf`,
-        caption: `🎉 Tu certificado CERTIMOTORS está listo${nombreCliente}. Guárdalo como respaldo de la inspección de tu vehículo.`,
+        caption: captionSegunVeredicto(veredicto, placa, nombreCliente),
       },
     },
     { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
