@@ -242,7 +242,7 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
         const criticos = hallazgos.filter((h) => h.estado === 'MAL').length;
         await notificarAprobacionAdmin(placa, url, orden, { criticos });
       } catch (error) {
-        logger.error('Error generando certificado (servicio estándar)', { placa, error: error.message });
+        logger.error('Error generando certificado (servicio BASICO)', { placa, error: error.message });
       }
     }
   }
