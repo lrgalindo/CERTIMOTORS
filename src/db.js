@@ -86,6 +86,34 @@ export async function obtenerClientePorId(id) {
   return data;
 }
 
+// Última orden del cliente — recupera el contexto cuando el mensaje no trae
+// placa (el caso normal: el cliente no repite la placa en cada mensaje).
+export async function obtenerUltimaOrdenPorCliente(clienteId) {
+  const { data, error } = await supabase
+    .from('ordenes')
+    .select('*')
+    .eq('cliente_id', clienteId)
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (error) throw new Error(`Error obteniendo orden del cliente: ${error.message}`);
+  return data?.[0] || null;
+}
+
+// Historial por cliente (no por placa): cubre la conversación pre-placa y
+// mantiene el hilo aunque el cliente tenga más de una orden.
+export async function obtenerConversacionesPorCliente(clienteId, limite = 6) {
+  const { data, error } = await supabase
+    .from('conversaciones')
+    .select('*')
+    .eq('cliente_id', clienteId)
+    .order('created_at', { ascending: false })
+    .limit(limite);
+
+  if (error) throw new Error(`Error fetching client conversations: ${error.message}`);
+  return data || [];
+}
+
 export async function obtenerConversacionesPorPlaca(placa) {
   const { data, error } = await supabase
     .from('conversaciones')
@@ -405,6 +433,8 @@ export default {
   actualizarStatusOrden,
   actualizarDatosOrden,
   guardarCertificado,
+  obtenerUltimaOrdenPorCliente,
+  obtenerConversacionesPorCliente,
   obtenerConversacionesPorPlaca,
   guardarConversacion,
   guardarRevision,

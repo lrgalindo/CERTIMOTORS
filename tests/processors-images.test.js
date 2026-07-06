@@ -76,6 +76,12 @@ function crearDbFake(overrides = {}) {
       return cliente;
     },
     obtenerConversacionesPorPlaca: async (placa) => conversaciones.filter((c) => c.placa === placa),
+    obtenerUltimaOrdenPorCliente: async (clienteId) => {
+      const propias = Object.values(ordenes).filter((o) => o.cliente_id === clienteId);
+      return propias[propias.length - 1] || null;
+    },
+    obtenerConversacionesPorCliente: async (clienteId) =>
+      conversaciones.filter((c) => c.cliente_id === clienteId).slice(-6).reverse(),
     guardarConversacion: async (placa, cliente_id, tipo_usuario, mensaje_entrada, respuesta_ia) => {
       const fila = { placa, cliente_id, tipo_usuario, mensaje_entrada, respuesta_ia };
       conversaciones.push(fila);

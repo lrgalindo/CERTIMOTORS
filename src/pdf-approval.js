@@ -3,7 +3,7 @@ import axios from 'axios';
 import { logger } from './logger.js';
 import { AppError } from './errors.js';
 
-const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '8289807493';
+export const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '8289807493';
 
 async function telegramPost(botToken, method, body) {
   const resp = await axios.post(`https://api.telegram.org/bot${botToken}/${method}`, body);
