@@ -81,6 +81,12 @@ function crearDbFake(overrides = {}) {
       return cliente;
     },
     obtenerConversacionesPorPlaca: async (placa) => conversaciones.filter((c) => c.placa === placa),
+    obtenerUltimaOrdenPorCliente: async (clienteId) => {
+      const propias = Object.values(ordenes).filter((o) => o.cliente_id === clienteId);
+      return propias[propias.length - 1] || null;
+    },
+    obtenerConversacionesPorCliente: async (clienteId) =>
+      conversaciones.filter((c) => c.cliente_id === clienteId).slice(-6).reverse(),
     guardarConversacion: async (placa, cliente_id, tipo_usuario, mensaje_entrada, respuesta_ia) => {
       const fila = { placa, cliente_id, tipo_usuario, mensaje_entrada, respuesta_ia };
       conversaciones.push(fila);
@@ -302,7 +308,7 @@ test('procesarWhatsapp: cliente y placa nuevos crean cliente, orden y guardan la
   delete process.env.WHATSAPP_GRAPH_API_URL;
 });
 
-test('procesarWhatsapp: sin placa en el mensaje no crea orden ni guarda conversación', async () => {
+test('procesarWhatsapp: sin placa no crea orden, pero sí guarda la conversación pre-placa', async () => {
   const { server, url } = await crearServidorClaudeFake(() => textResponse('¿Cuál es la placa de tu vehículo?'));
   process.env.ANTHROPIC_API_URL = url;
   process.env.WHATSAPP_GRAPH_API_URL = url; // redirect outbound send to fake server
@@ -313,9 +319,155 @@ test('procesarWhatsapp: sin placa en el mensaje no crea orden ni guarda conversa
 
   assert.ok(db._clientes['50288888888']);
   assert.equal(Object.keys(db._ordenes).length, ordenesAntes);
-  assert.equal(db._conversaciones.length, 0);
+  assert.equal(db._conversaciones.length, 1);
+  assert.equal(db._conversaciones[0].placa, null);
 
   server.close();
   delete process.env.ANTHROPIC_API_URL;
   delete process.env.WHATSAPP_GRAPH_API_URL;
+});
+
+test('extraerMarcadores: separa señal de servicio y escalación del texto visible', async () => {
+  const { procesarWhatsapp: _, extraerMarcadores, extraerPlaca } = await import('../src/processors.js');
+
+  const conServicio = extraerMarcadores('Perfecto, vamos con el FULL. [SERVICIO:FULL]');
+  assert.equal(conServicio.servicio, 'FULL');
+  assert.equal(conServicio.texto, 'Perfecto, vamos con el FULL.');
+  assert.equal(conServicio.escalar, false);
+
+  const conEscalar = extraerMarcadores('En un momento te contacta un asesor de CERTIMOTORS. [ESCALAR]');
+  assert.equal(conEscalar.escalar, true);
+  assert.ok(!conEscalar.texto.includes('[ESCALAR]'));
+
+  const sinMarcadores = extraerMarcadores('¿Cuál es tu placa?');
+  assert.deepEqual(sinMarcadores, { texto: '¿Cuál es tu placa?', servicio: null, escalar: false });
+
+  // Normalización de placa: minúsculas, espacios y guiones.
+  assert.equal(extraerPlaca('mi placa es p 123-abc'), 'P123ABC');
+  assert.equal(extraerPlaca('P926FTB'), 'P926FTB');
+  assert.equal(extraerPlaca('no tengo idea'), null);
+});
+
+const mensajeBoton = (id, title, { from = '50212345678' } = {}) => ({
+  entry: [
+    {
+      changes: [
+        {
+          value: {
+            messages: [
+              { from, type: 'interactive', interactive: { type: 'button_reply', button_reply: { id, title } } },
+            ],
+          },
+        },
+      ],
+    },
+  ],
+});
+
+test('procesarWhatsapp: botón FULL persiste servicio, pasa a ESPERANDO_PAGO y envía link de pago sin llamar a Claude', async () => {
+  const enviados = [];
+  const { server, url } = await crearServidorClaudeFake((body) => {
+    if (body.messaging_product) {
+      enviados.push(body);
+      return { ok: true };
+    }
+    throw new Error('No debía llamar a Claude para un botón de servicio');
+  });
+  process.env.WHATSAPP_GRAPH_API_URL = url;
+  process.env.ANTHROPIC_API_URL = 'http://127.0.0.1:1'; // si llama a Claude, truena
+
+  const db = crearDbFake();
+  db._clientes['50212345678'] = { id: 'cliente-1', numero_telefono: '50212345678' }; // dueño de P926FTB
+
+  await procesarWhatsapp(db, mensajeBoton('servicio_FULL', 'FULL — Q1,200'), 'fake-key');
+
+  assert.equal(db._ordenes.P926FTB.servicio, 'FULL');
+  assert.equal(db._ordenes.P926FTB.status, 'ESPERANDO_PAGO');
+  assert.equal(enviados.length, 1);
+  // Sin RECURRENTE_SECRET_KEY el link es el placeholder.
+  assert.ok(enviados[0].text.body.includes('https://pay.certimotors.com/pendiente'));
+
+  server.close();
+  delete process.env.ANTHROPIC_API_URL;
+  delete process.env.WHATSAPP_GRAPH_API_URL;
+});
+
+test('procesarWhatsapp: placa y servicio en un solo mensaje — marcador [SERVICIO:FULL] elige y agrega link', async () => {
+  const enviados = [];
+  const { server, url } = await crearServidorClaudeFake((body) => {
+    if (body.messaging_product) {
+      enviados.push(body);
+      return { ok: true };
+    }
+    return textResponse('Perfecto — ya registré tu P999ZZZ con el servicio FULL. Te paso el link de pago. [SERVICIO:FULL]');
+  });
+  process.env.ANTHROPIC_API_URL = url;
+  process.env.WHATSAPP_GRAPH_API_URL = url;
+
+  const db = crearDbFake();
+  await procesarWhatsapp(db, mensajeWhatsapp('hola quiero certificar placa P999ZZZ con el full', { from: '50233333333' }), 'fake-key');
+
+  assert.equal(db._ordenes.P999ZZZ.servicio, 'FULL');
+  assert.equal(db._ordenes.P999ZZZ.status, 'ESPERANDO_PAGO');
+  assert.equal(enviados.length, 1);
+  const cuerpo = enviados[0].text.body;
+  assert.ok(cuerpo.includes('Podés pagar aquí:'));
+  assert.ok(!cuerpo.includes('[SERVICIO'));
+
+  server.close();
+  delete process.env.ANTHROPIC_API_URL;
+  delete process.env.WHATSAPP_GRAPH_API_URL;
+});
+
+test('procesarWhatsapp: placa de otro cliente no expone la orden ajena', async () => {
+  const enviados = [];
+  const { server, url } = await crearServidorClaudeFake((body) => {
+    if (body.messaging_product) {
+      enviados.push(body);
+      return { ok: true };
+    }
+    return textResponse('Solo puedo darte información de tus propias órdenes.');
+  });
+  process.env.ANTHROPIC_API_URL = url;
+  process.env.WHATSAPP_GRAPH_API_URL = url;
+
+  const db = crearDbFake();
+  // P926FTB pertenece a cliente-1; escribe otro número.
+  await procesarWhatsapp(db, mensajeWhatsapp('info de la placa P926FTB por favor', { from: '50244444444' }), 'fake-key');
+
+  // No se tocó la orden ajena ni se asoció al nuevo cliente.
+  assert.equal(db._ordenes.P926FTB.cliente_id, 'cliente-1');
+  assert.equal(db._ordenes.P926FTB.status, 'INICIADA');
+  assert.equal(enviados.length, 1);
+
+  server.close();
+  delete process.env.ANTHROPIC_API_URL;
+  delete process.env.WHATSAPP_GRAPH_API_URL;
+});
+
+test('procesarPagoRecurrente: marca PAGO_CONFIRMADO y registra notificación', async () => {
+  const { procesarPagoRecurrente } = await import('../src/processors.js');
+  const db = crearDbFake();
+
+  const resultado = await procesarPagoRecurrente(db, {
+    event_type: 'payment_intent.succeeded',
+    checkout: { metadata: { placa: 'P926FTB', servicio: 'FULL' } },
+  });
+
+  assert.equal(resultado.procesado, true);
+  assert.equal(db._ordenes.P926FTB.status, 'PAGO_CONFIRMADO');
+  assert.ok(db._notificaciones.some((n) => n.tipo === 'PAGO_CONFIRMADO'));
+});
+
+test('procesarPagoRecurrente: ignora eventos que no son pago exitoso', async () => {
+  const { procesarPagoRecurrente } = await import('../src/processors.js');
+  const db = crearDbFake();
+
+  const resultado = await procesarPagoRecurrente(db, {
+    event_type: 'checkout.expired',
+    checkout: { metadata: { placa: 'P926FTB' } },
+  });
+
+  assert.equal(resultado.procesado, false);
+  assert.equal(db._ordenes.P926FTB.status, 'INICIADA');
 });
