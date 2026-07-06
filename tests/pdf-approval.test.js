@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { notificarAdminParaAprobacion, procesarCallbackAprobacion, procesarCallbackCorreccion } from '../src/pdf-approval.js';
+import {
+  notificarAdminParaAprobacion,
+  procesarCallbackAprobacion,
+  procesarCallbackCorreccion,
+  captionSegunVeredicto,
+} from '../src/pdf-approval.js';
 
 function crearDbFake(overrides = {}) {
   const tokens = new Map(); // token → { placa, usado }
@@ -123,4 +128,20 @@ test('procesarCallbackCorreccion: rechaza token inválido con AppError 401', asy
       return true;
     }
   );
+});
+
+test('captionSegunVeredicto: mapea el veredicto del validator al caption del PDF', () => {
+  const aprobado = captionSegunVeredicto('✅ APROBADO PARA CERTIFICADO — todo en orden', 'P926FTB', ', Juan');
+  assert.ok(aprobado.includes('inspección aprobada'));
+  assert.ok(aprobado.includes('P926FTB'));
+  assert.ok(aprobado.includes(', Juan'));
+
+  const conObs = captionSegunVeredicto('⚠️ APROBADO CON IMPEDIMENTO — multa pendiente', 'P926FTB');
+  assert.ok(conObs.includes('aprobado con observaciones'));
+
+  const rechazado = captionSegunVeredicto('❌ RECHAZADO — inspección incompleta', 'P926FTB');
+  assert.ok(rechazado.includes('no fue aprobado'));
+
+  const generico = captionSegunVeredicto(null, 'P926FTB');
+  assert.ok(generico.includes('Tu certificado CERTIMOTORS está listo'));
 });
