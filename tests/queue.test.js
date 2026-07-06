@@ -133,3 +133,60 @@ test('procesarJob: proveedor desconocido marca fallido con max_intentos directam
   assert.equal(info.intentos, 3);
   assert.equal(info.maxIntentos, 3);
 });
+
+// ─── Bloque 3d: fallback al cliente en job fallido permanente ─────────────────
+
+import http from 'node:http';
+
+function crearServidorFake(respondFn) {
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        const parsed = JSON.parse(body);
+        const resp = respondFn(parsed);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(resp));
+      });
+    });
+    server.listen(0, () => resolve({ server, url: `http://127.0.0.1:${server.address().port}` }));
+  });
+}
+
+test('procesarJob: job whatsapp fallido permanente envía WhatsApp de dificultades técnicas al cliente', async () => {
+  const enviados = [];
+  const { server, url } = await crearServidorFake((body) => {
+    enviados.push(body);
+    return { ok: true };
+  });
+  process.env.WHATSAPP_GRAPH_API_URL = url;
+  process.env.WHATSAPP_PHONE_NUMBER_ID = '1234567890';
+  process.env.WHATSAPP_TOKEN = 'fake-token';
+
+  const dbFake = {
+    marcarJobCompletado: async () => {},
+    marcarJobFallido: async () => {},
+  };
+  const procesadores = { whatsapp: async () => { throw new Error('fallo crítico'); } };
+
+  const job = {
+    id: 'job-perm',
+    proveedor: 'whatsapp',
+    payload: { entry: [{ changes: [{ value: { messages: [{ from: '50299999999', type: 'text', text: { body: 'hola' } }] } }] }] },
+    intentos: 2, // intentos ya fue 2, ahora será 3 = max_intentos
+    max_intentos: 3,
+  };
+
+  await procesarJob({ db: dbFake, procesadores }, job);
+
+  const waMensaje = enviados.find((e) => e.messaging_product === 'whatsapp');
+  assert.ok(waMensaje, 'debe haber enviado un mensaje WhatsApp');
+  assert.equal(waMensaje.to, '50299999999');
+  assert.ok(waMensaje.text.body.includes('dificultades técnicas'));
+
+  server.close();
+  delete process.env.WHATSAPP_GRAPH_API_URL;
+  delete process.env.WHATSAPP_PHONE_NUMBER_ID;
+  delete process.env.WHATSAPP_TOKEN;
+});
