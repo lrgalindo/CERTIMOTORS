@@ -8,10 +8,10 @@ DATOS DEL CLIENTE:
 - Nombre: ${cliente?.nombre || 'Cliente'}
 - Número: +${cliente?.numero_telefono || 'desconocido'}
 ${placa ? `- Placa en gestión: ${placa}` : '- Sin placa registrada aún'}
-${orden ? `- Orden: ${orden.id} | Estado: ${orden.status} | Servicio: ${orden.servicio || 'ESTÁNDAR'}` : '- Sin orden activa'}
+${orden ? `- Orden: ${orden.id} | Estado: ${orden.status} | Servicio: ${orden.servicio || 'BASICO'}` : '- Sin orden activa'}
 
 SERVICIOS Y PRECIOS:
-- ESTÁNDAR Q650: inspección de 110 puntos + certificado PDF (2 páginas)
+- BÁSICO Q550: inspección de 110 puntos + certificado PDF (2 páginas)
 - FULL Q1,200: inspección + verificación legal (impuesto, calcomanía, multas, gravámenes) + certificado PDF (3 páginas)
 
 FLUJO QUE DEBES GUIAR:
@@ -125,7 +125,7 @@ ${hallazgosTexto}
 ${
     verificacionesTexto
       ? `VERIFICACIONES ADMINISTRATIVAS:\n${verificacionesTexto}\n`
-      : 'Sin verificaciones administrativas (servicio estándar, sin página administrativa).\n'
+      : 'Sin verificaciones administrativas (servicio BÁSICO, sin página administrativa).\n'
   }
 
 INSTRUCCIONES:

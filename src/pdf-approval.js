@@ -17,7 +17,7 @@ export async function notificarAprobacionAdmin(placa, pdfUrl, orden, resumen = {
     return;
   }
 
-  const servicio = orden.servicio === 'FULL' ? 'FULL Q1,200' : 'ESTÁNDAR Q650';
+  const servicio = orden.servicio === 'FULL' ? 'FULL Q1,200' : 'BÁSICO Q550';
   const { criticos = 0 } = resumen;
   const alertaCriticos =
     criticos > 0 ? `\n⚠️ *${criticos} hallazgo(s) crítico(s)*` : '\n✅ Sin hallazgos críticos';

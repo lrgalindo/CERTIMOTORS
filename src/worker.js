@@ -54,12 +54,42 @@ export async function procesarJob({ db: dbDep, procesadores }, job) {
   }
 }
 
+// Identifica al cliente dueño del job para poder secuenciar sus mensajes.
+// Sin clave extraíble, el job va solo en su propio grupo (se procesa igual).
+export function claveCliente(job) {
+  const p = job.payload;
+  const clave =
+    job.proveedor === 'whatsapp'
+      ? p?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from
+      : p?.message?.from?.id || p?.callback_query?.from?.id;
+  return clave ? `${job.proveedor}:${clave}` : `job:${job.id}`;
+}
+
+// Los jobs llegan ordenados por created_at (ORDER BY del RPC reclamar_jobs_pendientes).
+// Mismo cliente → en secuencia, para no responder mensajes fuera de orden;
+// clientes distintos → en paralelo, manteniendo la concurrencia del worker.
+export async function procesarLote(deps, jobs) {
+  const grupos = new Map();
+  for (const job of jobs) {
+    const clave = claveCliente(job);
+    if (!grupos.has(clave)) grupos.set(clave, []);
+    grupos.get(clave).push(job);
+  }
+  await Promise.allSettled(
+    [...grupos.values()].map(async (grupo) => {
+      for (const job of grupo) {
+        await procesarJob(deps, job);
+      }
+    })
+  );
+}
+
 async function tick() {
   try {
     const jobs = await db.reclamarJobsPendientes(QUEUE_CONCURRENCY);
     if (jobs.length > 0) {
       logger.info(`Worker: ${jobs.length} job(s) reclamado(s)`);
-      await Promise.allSettled(jobs.map((job) => procesarJob({ db, procesadores: PROCESADORES }, job)));
+      await procesarLote({ db, procesadores: PROCESADORES }, jobs);
     }
   } catch (error) {
     logger.error('Error en ciclo del worker', { error: error.message });
