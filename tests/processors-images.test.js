@@ -236,12 +236,33 @@ test('procesarWhatsapp: mensaje con image (sin text) crea cliente y llama a Clau
   delete process.env.WHATSAPP_GRAPH_API_URL;
 });
 
-test('procesarWhatsapp: mensaje sin text ni image retorna sin procesar', async () => {
-  const payloadVacio = {
-    entry: [{ changes: [{ value: { messages: [{ from: '50212345678', type: 'sticker' }] } }] }],
+test('procesarWhatsapp: nota de voz recibe respuesta pidiendo texto', async () => {
+  const enviados = [];
+  const { server, url } = await crearServidorClaudeFake((body) => {
+    if (body.messaging_product) {
+      enviados.push(body);
+      return { ok: true };
+    }
+    assert.ok(
+      JSON.stringify(body.messages).includes('nota de voz'),
+      'el asesor debe saber que llegó una nota de voz'
+    );
+    return textResponse('Recibí tu audio — por el momento trabajo mejor con texto o fotos. ¿Me escribís lo que necesitás?');
+  });
+  process.env.ANTHROPIC_API_URL = url;
+  process.env.WHATSAPP_GRAPH_API_URL = url;
+
+  const payloadAudio = {
+    entry: [{ changes: [{ value: { messages: [{ from: '50212345678', type: 'audio', audio: { id: 'audio-1' } }] } }] }],
   };
 
   const db = crearDbFake();
-  await assert.doesNotReject(() => procesarWhatsapp(db, payloadVacio, 'fake-key'));
-  assert.equal(Object.keys(db._clientes).length, 0, 'no debe crear cliente para tipo sin soporte');
+  await procesarWhatsapp(db, payloadAudio, 'fake-key');
+
+  assert.equal(enviados.length, 1, 'debe responder al cliente');
+  assert.ok(enviados[0].text.body.includes('audio'));
+
+  server.close();
+  delete process.env.ANTHROPIC_API_URL;
+  delete process.env.WHATSAPP_GRAPH_API_URL;
 });
