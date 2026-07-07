@@ -43,6 +43,13 @@ export function extraerMarcadores(respuesta) {
   return { texto, servicio, escalar };
 }
 
+// /start y demás comandos de Telegram no son texto de inspección/trámite: se
+// responden con guía fija, sin pasar por Claude (un /start metido al flujo de
+// extracción participó en el incidente de jobs huérfanos, jul 2026).
+export function esComandoBot(message) {
+  return Boolean(message?.entities?.some((e) => e.type === 'bot_command' && e.offset === 0));
+}
+
 async function resolverPlacaActivaMecanico(db, mecanicoId) {
   const ultimaPlaca = await db.obtenerUltimaPlacaPorMecanico(mecanicoId);
   if (!ultimaPlaca) return null;
@@ -411,6 +418,15 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
 
   logger.info(`Mechanic: ${userName} (${telegram_id})`, { text: texto.substring(0, 50) });
 
+  if (esComandoBot(message)) {
+    await enviarMensajeTelegram(
+      botToken,
+      chatId,
+      `Hola ${userName} 👋 Soy el asistente de inspecciones de CERTIMOTORS.\n\nDecime la placa del vehículo que vas a inspeccionar y después mandame tus hallazgos (texto o foto).`
+    );
+    return;
+  }
+
   const placa = extraerPlaca(texto) || (await resolverPlacaActivaMecanico(db, telegram_id));
   if (!placa) {
     await enviarMensajeTelegram(botToken, chatId, '¿Cuál es la placa del vehículo que estás inspeccionando?');
@@ -513,6 +529,15 @@ export async function procesarTelegramTramitador(db, payload, botToken, apiKey) 
   const userName = message.from?.first_name || 'Tramitador';
 
   logger.info(`Processor: ${userName} (${telegram_id})`, { text: texto.substring(0, 50) });
+
+  if (esComandoBot(message)) {
+    await enviarMensajeTelegram(
+      botToken,
+      chatId,
+      `Hola ${userName} 👋 Soy el asistente de trámites de CERTIMOTORS.\n\nDecime la placa del vehículo y contame el avance del trámite (impuesto, calcomanía, multas, gravámenes).`
+    );
+    return;
+  }
 
   const placa = extraerPlaca(texto);
   if (!placa) {

@@ -37,6 +37,9 @@ async function ejecutarLlamadaClaude(apiKey, db, systemPrompt, messages, rol, pl
           'anthropic-version': '2023-06-01',
           'content-type': 'application/json',
         },
+        // Mayor que el default global: las respuestas largas de Claude pueden
+        // tardar más de 15s, pero nunca deben colgar el job indefinidamente.
+        timeout: Number(process.env.CLAUDE_TIMEOUT_MS) || 60000,
       }
     );
 

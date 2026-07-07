@@ -407,6 +407,20 @@ export async function marcarJobCompletado(id) {
   if (error) throw new Error(`Error marcando job completado: ${error.message}`);
 }
 
+// Jobs huérfanos: reclamados (status 'procesando') pero nunca resueltos —
+// promesa colgada o proceso caído a mitad de trabajo. El reaper del worker
+// los detecta por antigüedad de updated_at (el RPC de reclamo lo refresca).
+export async function obtenerJobsHuerfanos(umbralMs) {
+  const limite = new Date(Date.now() - umbralMs).toISOString();
+  const { data, error } = await supabase
+    .from('cola_jobs')
+    .select('*')
+    .eq('status', 'procesando')
+    .lt('updated_at', limite);
+  if (error) throw new Error(`Error buscando jobs huérfanos: ${error.message}`);
+  return data || [];
+}
+
 export async function marcarJobFallido(id, { intentos, maxIntentos, error: errorMsg, proximoIntentoEn }) {
   const status = intentos >= maxIntentos ? 'fallido_permanente' : 'pendiente';
   const { error } = await supabase
@@ -458,4 +472,5 @@ export default {
   reclamarJobsPendientes,
   marcarJobCompletado,
   marcarJobFallido,
+  obtenerJobsHuerfanos,
 };

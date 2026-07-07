@@ -568,3 +568,46 @@ test('procesarPagoRecurrente: ignora eventos que no son pago exitoso', async () 
   assert.equal(resultado.procesado, false);
   assert.equal(db._ordenes.P926FTB.status, 'INICIADA');
 });
+
+// ─── Comandos de bot (/start) — incidente jobs huérfanos jul 2026 ─────────────
+
+import { esComandoBot } from '../src/processors.js';
+
+test('esComandoBot: detecta bot_command en offset 0 y nada más', () => {
+  assert.ok(esComandoBot({ entities: [{ type: 'bot_command', length: 6, offset: 0 }] }));
+  assert.ok(!esComandoBot({ entities: [{ type: 'bot_command', length: 6, offset: 5 }] }));
+  assert.ok(!esComandoBot({ entities: [{ type: 'mention', length: 6, offset: 0 }] }));
+  assert.ok(!esComandoBot({}));
+  assert.ok(!esComandoBot(undefined));
+});
+
+test('procesarTelegramMecanico: /start no entra al flujo de inspección aunque haya placa activa', async () => {
+  // Escenario exacto del incidente: mecánico con inspección activa manda /start;
+  // antes iba a Claude como si fuera un hallazgo. Claude apunta a un puerto
+  // muerto: si se llamara, el test truena.
+  const db = crearDbFake({ obtenerUltimaPlacaPorMecanico: async () => 'P926FTB' });
+  const original = process.env.ANTHROPIC_API_URL;
+  process.env.ANTHROPIC_API_URL = 'http://127.0.0.1:1';
+
+  const payload = mensajeTelegram('/start');
+  payload.message.entities = [{ type: 'bot_command', length: 6, offset: 0 }];
+  await procesarTelegramMecanico(db, payload, undefined, 'fake-key');
+
+  assert.equal(db._revisiones.length, 0);
+  if (original) process.env.ANTHROPIC_API_URL = original;
+  else delete process.env.ANTHROPIC_API_URL;
+});
+
+test('procesarTelegramTramitador: /start responde guía fija sin llamar a Claude', async () => {
+  const db = crearDbFake();
+  const original = process.env.ANTHROPIC_API_URL;
+  process.env.ANTHROPIC_API_URL = 'http://127.0.0.1:1';
+
+  const payload = mensajeTelegram('/start P926FTB'); // incluso con placa en el texto
+  payload.message.entities = [{ type: 'bot_command', length: 6, offset: 0 }];
+  await procesarTelegramTramitador(db, payload, undefined, 'fake-key');
+
+  assert.equal(db._notificaciones.length, 0);
+  if (original) process.env.ANTHROPIC_API_URL = original;
+  else delete process.env.ANTHROPIC_API_URL;
+});

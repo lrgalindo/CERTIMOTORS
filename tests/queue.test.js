@@ -190,3 +190,75 @@ test('procesarJob: job whatsapp fallido permanente envía WhatsApp de dificultad
   delete process.env.WHATSAPP_PHONE_NUMBER_ID;
   delete process.env.WHATSAPP_TOKEN;
 });
+
+// ─── Reaper de jobs huérfanos (incidente P0 jul 2026) ────────────────────────
+
+const { recuperarJobsHuerfanos } = await import('../src/worker.js');
+
+test('recuperarJobsHuerfanos: reencola huérfano con intentos disponibles', async () => {
+  const llamadas = [];
+  const dbFake = {
+    obtenerJobsHuerfanos: async () => [
+      { id: 'h1', proveedor: 'telegram_mecanico', payload: {}, intentos: 0, max_intentos: 3 },
+    ],
+    marcarJobFallido: async (id, info) => llamadas.push([id, info]),
+  };
+
+  const recuperados = await recuperarJobsHuerfanos({ db: dbFake });
+
+  assert.equal(recuperados, 1);
+  assert.equal(llamadas.length, 1);
+  const [id, info] = llamadas[0];
+  assert.equal(id, 'h1');
+  assert.equal(info.intentos, 1);
+  assert.equal(info.maxIntentos, 3);
+  assert.match(info.error, /huérfano/);
+});
+
+test('recuperarJobsHuerfanos: huérfano sin intentos restantes queda permanente y avisa al cliente WhatsApp', async () => {
+  const enviados = [];
+  const { server, url } = await crearServidorFake((body) => {
+    enviados.push(body);
+    return { ok: true };
+  });
+  process.env.WHATSAPP_GRAPH_API_URL = url;
+  process.env.WHATSAPP_PHONE_NUMBER_ID = '1234567890';
+  process.env.WHATSAPP_TOKEN = 'fake-token';
+
+  const llamadas = [];
+  const dbFake = {
+    obtenerJobsHuerfanos: async () => [
+      {
+        id: 'h2',
+        proveedor: 'whatsapp',
+        payload: { entry: [{ changes: [{ value: { messages: [{ from: '50288888888' }] } }] }] },
+        intentos: 2,
+        max_intentos: 3,
+      },
+    ],
+    marcarJobFallido: async (id, info) => llamadas.push([id, info]),
+  };
+
+  await recuperarJobsHuerfanos({ db: dbFake });
+
+  // intentos llega a max => marcarJobFallido lo dejará fallido_permanente
+  assert.equal(llamadas[0][1].intentos, 3);
+  const waMensaje = enviados.find((e) => e.messaging_product === 'whatsapp');
+  assert.ok(waMensaje, 'debe avisar al cliente por WhatsApp');
+  assert.equal(waMensaje.to, '50288888888');
+
+  server.close();
+  delete process.env.WHATSAPP_GRAPH_API_URL;
+  delete process.env.WHATSAPP_PHONE_NUMBER_ID;
+  delete process.env.WHATSAPP_TOKEN;
+});
+
+test('recuperarJobsHuerfanos: sin huérfanos no toca nada', async () => {
+  const dbFake = {
+    obtenerJobsHuerfanos: async () => [],
+    marcarJobFallido: async () => {
+      throw new Error('no debería llamarse');
+    },
+  };
+  assert.equal(await recuperarJobsHuerfanos({ db: dbFake }), 0);
+});
