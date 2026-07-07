@@ -1,4 +1,5 @@
 import 'dotenv/config.js';
+import axios from 'axios';
 import express from 'express';
 import compression from 'compression';
 import * as db from './db.js';
@@ -14,6 +15,12 @@ import { registrarWebhookTelegram } from './telegram-client.js';
 import { verificarFirmaWhatsapp, verificarSecretoTelegram, verificarFirmaRecurrente } from './webhook-security.js';
 import { procesarPagoRecurrente } from './processors.js';
 import { validarOrden } from './validar-orden.js';
+
+// Sin timeout, un socket colgado (Meta/Telegram/Recurrente) deja la promesa sin
+// resolver para siempre y el job muere en `procesando` con error null (incidente
+// jobs huérfanos, jul 2026). Aplica a todas las llamadas axios del proceso;
+// claude-client.js sobreescribe con un timeout mayor para respuestas largas.
+axios.defaults.timeout = Number(process.env.HTTP_TIMEOUT_MS) || 15000;
 
 const app = express();
 app.set('trust proxy', 1);
