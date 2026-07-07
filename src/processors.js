@@ -221,8 +221,9 @@ export async function procesarWhatsapp(db, payload, apiKey) {
 
   validatePhoneNumber(numeroCliente);
 
-  if (!['interactive', 'image', 'text'].includes(tipoMensaje)) {
-    logger.info(`WhatsApp: tipo de mensaje no soportado (${tipoMensaje}), ignorando`);
+  // Solo las reacciones se ignoran en silencio; a todo lo demás el asesor responde.
+  if (tipoMensaje === 'reaction') {
+    logger.info(`WhatsApp: reacción recibida, ignorando`);
     return;
   }
 
@@ -268,6 +269,16 @@ export async function procesarWhatsapp(db, payload, apiKey) {
     validateMessage(textoCliente);
     logger.info(`WhatsApp: +${numeroCliente}`, { text: textoCliente.substring(0, 50) });
     contentUser = textoCliente;
+  } else if (tipoMensaje === 'audio') {
+    // ponytail: sin transcripción todavía — el asesor pide que escriba
+    textoCliente = '[nota de voz]';
+    contentUser = 'El cliente envió una nota de voz que no podés escuchar.';
+    logger.info(`WhatsApp audio: +${numeroCliente}`);
+  } else {
+    // video, document, sticker, location, etc.
+    textoCliente = `[${tipoMensaje}]`;
+    contentUser = `El cliente envió un mensaje de tipo "${tipoMensaje}" que no podés ver.`;
+    logger.info(`WhatsApp ${tipoMensaje}: +${numeroCliente}`);
   }
 
   // Contexto de orden: placa del mensaje, o la última orden del cliente si no
