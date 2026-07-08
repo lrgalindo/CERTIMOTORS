@@ -1,10 +1,16 @@
 import { createClient } from '@supabase/supabase-js';
 import { v4 as uuidv4 } from 'uuid';
+import { statusTrasFallo } from './queue.js';
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY
-);
+// supabase-js usa fetch, que no tiene timeout: era el único cliente HTTP sin
+// acotar tras el fix de axios (PR #11) y cada job hace varias llamadas a DB.
+// Un fetch colgado dejaba el job en 'procesando' hasta que lo rescatara el reaper.
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY, {
+  global: {
+    fetch: (url, options = {}) =>
+      fetch(url, { ...options, signal: options.signal ?? AbortSignal.timeout(Number(process.env.SUPABASE_TIMEOUT_MS) || 15000) }),
+  },
+});
 
 export async function initDB() {
   try {
@@ -422,7 +428,7 @@ export async function obtenerJobsHuerfanos(umbralMs) {
 }
 
 export async function marcarJobFallido(id, { intentos, maxIntentos, error: errorMsg, proximoIntentoEn }) {
-  const status = intentos >= maxIntentos ? 'fallido_permanente' : 'pendiente';
+  const status = statusTrasFallo(intentos, maxIntentos);
   const { error } = await supabase
     .from('cola_jobs')
     .update({
