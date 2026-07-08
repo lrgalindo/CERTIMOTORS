@@ -228,6 +228,12 @@ export async function procesarWhatsapp(db, payload, apiKey) {
 
   validatePhoneNumber(numeroCliente);
 
+  const bloqueados = (process.env.NUMEROS_BLOQUEADOS || '').split(',').map(n => n.trim()).filter(Boolean);
+  if (bloqueados.includes(numeroCliente)) {
+    logger.info(`WhatsApp: número bloqueado, ignorando`, { numeroCliente });
+    return;
+  }
+
   // Solo las reacciones se ignoran en silencio; a todo lo demás el asesor responde.
   if (tipoMensaje === 'reaction') {
     logger.info(`WhatsApp: reacción recibida, ignorando`);
