@@ -262,3 +262,40 @@ test('recuperarJobsHuerfanos: sin huérfanos no toca nada', async () => {
   };
   assert.equal(await recuperarJobsHuerfanos({ db: dbFake }), 0);
 });
+
+// ─── Transición de status del reaper, de punta a punta ────────────────────────
+// Regresión pedida tras el incidente: verificar explícitamente que el job
+// rescatado CAMBIA de status ('pendiente' o 'fallido_permanente'), no solo que
+// se le escribe el texto de error. El fake usa statusTrasFallo, la misma
+// función con la que db.marcarJobFallido decide el status en producción.
+
+import { statusTrasFallo } from '../src/queue.js';
+
+test('statusTrasFallo: pendiente con intentos disponibles, permanente al agotarlos', () => {
+  assert.equal(statusTrasFallo(1, 3), 'pendiente');
+  assert.equal(statusTrasFallo(2, 3), 'pendiente');
+  assert.equal(statusTrasFallo(3, 3), 'fallido_permanente');
+  assert.equal(statusTrasFallo(4, 3), 'fallido_permanente');
+});
+
+test('recuperarJobsHuerfanos: el status del job transiciona, no queda en procesando', async () => {
+  const filas = {
+    h1: { id: 'h1', proveedor: 'telegram_mecanico', payload: {}, intentos: 0, max_intentos: 3, status: 'procesando' },
+    h2: { id: 'h2', proveedor: 'telegram_mecanico', payload: {}, intentos: 2, max_intentos: 3, status: 'procesando' },
+  };
+  const dbFake = {
+    obtenerJobsHuerfanos: async () => Object.values(filas),
+    // Mismo contrato que db.marcarJobFallido: el status sale de statusTrasFallo.
+    marcarJobFallido: async (id, { intentos, maxIntentos, error }) => {
+      filas[id] = { ...filas[id], status: statusTrasFallo(intentos, maxIntentos), intentos, error };
+    },
+  };
+
+  await recuperarJobsHuerfanos({ db: dbFake });
+
+  assert.equal(filas.h1.status, 'pendiente');
+  assert.equal(filas.h1.intentos, 1);
+  assert.equal(filas.h2.status, 'fallido_permanente');
+  assert.equal(filas.h2.intentos, 3);
+  assert.match(filas.h1.error, /huérfano/);
+});
