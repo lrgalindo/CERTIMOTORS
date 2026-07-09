@@ -75,7 +75,6 @@ function crearDbFake(overrides = {}) {
       clientes[numero] = cliente;
       return cliente;
     },
-    obtenerConversacionesPorPlaca: async (placa) => conversaciones.filter((c) => c.placa === placa),
     obtenerUltimaOrdenPorCliente: async (clienteId) => {
       const propias = Object.values(ordenes).filter((o) => o.cliente_id === clienteId);
       return propias[propias.length - 1] || null;
@@ -170,7 +169,7 @@ test('procesarTelegramMecanico: degradación graceful si falla descarga de image
   );
   process.env.ANTHROPIC_API_URL = url;
 
-  // botToken = undefined → obtenerImagenTelegram retorna null inmediatamente (degradación graceful)
+  // botToken = undefined → la descarga de la imagen falla y el flujo sigue sin ella (degradación graceful)
   const db = crearDbFake();
   await assert.doesNotReject(() =>
     procesarTelegramMecanico(

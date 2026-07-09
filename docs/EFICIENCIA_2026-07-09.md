@@ -71,6 +71,7 @@ confirmación explícita por regla del proyecto).
   (validators.js) y sus tests. El flujo de tokens de aprobación
   (`pdf-approval.js`) se conserva: no está cableado a rutas, pero es el candidato
   natural para la aprobación vía web (ver API_CONTRACT_WEB.md).
-- Ramas locales mergeadas borradas. Las remotas mergeadas quedan para Rodrigo
-  (el harness bloquea borrado masivo remoto, correcto):
+- Ramas locales mergeadas borradas. Las remotas mergeadas quedan para Rodrigo —
+  **comando destructivo: revisar la lista con `git branch -r --merged origin/main`
+  antes de correrlo** (el harness bloquea el borrado masivo remoto, correcto):
   `git branch -r --merged origin/main | grep -v 'HEAD\|origin/main' | sed 's|origin/||' | xargs -n1 git push origin --delete`

@@ -80,7 +80,6 @@ function crearDbFake(overrides = {}) {
       clientes[numero] = cliente;
       return cliente;
     },
-    obtenerConversacionesPorPlaca: async (placa) => conversaciones.filter((c) => c.placa === placa),
     obtenerUltimaOrdenPorCliente: async (clienteId) => {
       const propias = Object.values(ordenes).filter((o) => o.cliente_id === clienteId);
       return propias[propias.length - 1] || null;
