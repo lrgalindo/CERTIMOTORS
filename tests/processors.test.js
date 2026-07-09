@@ -556,6 +556,20 @@ test('procesarTelegramMecanico: no re-avisa al cliente si la orden ya estaba INS
   delete process.env.WHATSAPP_GRAPH_API_URL;
 });
 
+test('procesarPagoRecurrente: replay del webhook no repite avisos si el pago ya se procesó', async () => {
+  const { procesarPagoRecurrente } = await import('../src/processors.js');
+  const db = crearDbFake();
+  db._ordenes.P926FTB.status = 'PAGO_CONFIRMADO';
+
+  const resultado = await procesarPagoRecurrente(db, {
+    event_type: 'payment_intent.succeeded',
+    checkout: { metadata: { placa: 'P926FTB', servicio: 'FULL' } },
+  });
+
+  assert.equal(resultado.procesado, false);
+  assert.ok(!db._notificaciones.some((n) => n.tipo === 'PAGO_CONFIRMADO'));
+});
+
 test('procesarPagoRecurrente: ignora eventos que no son pago exitoso', async () => {
   const { procesarPagoRecurrente } = await import('../src/processors.js');
   const db = crearDbFake();

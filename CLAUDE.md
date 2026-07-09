@@ -299,7 +299,7 @@ Verificar con el usuario que estas variables están en Render con valores reales
 ```
 WHATSAPP_TOKEN              ✅ subido
 WHATSAPP_PHONE_NUMBER_ID    ✅ 1209535848903480
-WHATSAPP_WEBHOOK_VERIFY_TOKEN ✅ certimotors_whatsapp_2024
+WHATSAPP_WEBHOOK_VERIFY_TOKEN ✅ configurado en Render
 WHATSAPP_BUSINESS_ACCOUNT_ID  → agregar: 1501313747964606
 WHATSAPP_APP_SECRET           → pendiente (obtener en Meta Developers → Config Básica)
 SUPABASE_URL                  → verificar que no sea placeholder
@@ -309,8 +309,8 @@ PUBLIC_URL                    → https://certimotors.onrender.com
 NODE_ENV                      → production
 DATABASE_TYPE                 → supabase
 TELEGRAM_AUTO_REGISTER_WEBHOOK → true (si webhooks no están registrados)
-TELEGRAM_MECANICO_BOT_TOKEN   → 8921768773:AAGF1YseaSC8I6gKCq1O0M5mFgw7vl_Pu-s
-TELEGRAM_TRAMITADOR_BOT_TOKEN → 8877958532:AAHq2gB-0kmZWU8WaaX50d-B7HGRajn9-zQ
+TELEGRAM_MECANICO_BOT_TOKEN   → configurado en Render (tokens viejos rotados; nunca commitear valores)
+TELEGRAM_TRAMITADOR_BOT_TOKEN → configurado en Render (tokens viejos rotados; nunca commitear valores)
 TELEGRAM_ADMIN_CHAT_ID        → agregar (ID numérico del chat admin en Telegram)
 RECURRENTE_SECRET_KEY         → agregar (clave secreta de API de Recurrente)
 RECURRENTE_WEBHOOK_SECRET     → agregar (secreto para verificar webhooks Svix de Recurrente)

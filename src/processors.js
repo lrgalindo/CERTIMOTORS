@@ -381,6 +381,14 @@ export async function procesarPagoRecurrente(db, payload) {
     return { procesado: false };
   }
 
+  // Idempotencia: Recurrente/Svix reintenta y puede replayar dentro de la
+  // ventana anti-replay. Si la orden ya avanzó más allá del pago, no repetir
+  // el cambio de estado ni los avisos al cliente y al admin.
+  if (!['INICIADA', 'SERVICIO_PRESENTADO', 'ESPERANDO_PAGO'].includes(orden.status)) {
+    logger.info('Webhook Recurrente ignorado (pago ya procesado)', { placa, status: orden.status });
+    return { procesado: false };
+  }
+
   await db.actualizarStatusOrden(placa, 'PAGO_CONFIRMADO');
   await db.crearNotificacion(placa, 'PAGO_CONFIRMADO', `Pago confirmado vía Recurrente (${orden.servicio || 'BASICO'})`);
   logger.success('Pago confirmado vía Recurrente', { placa });
