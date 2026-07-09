@@ -383,6 +383,37 @@ export async function obtenerStatsReporte() {
   };
 }
 
+// ─── Listados de solo lectura para el backoffice ─────────────────────────────
+
+export async function listarOrdenes({ status = null, placa = null, limite = 50 } = {}) {
+  let query = supabase.from('ordenes').select('*').order('created_at', { ascending: false }).limit(limite);
+  if (status) query = query.eq('status', status);
+  if (placa) query = query.eq('placa', placa);
+  const { data, error } = await query;
+  if (error) throw new Error(`Error listando órdenes: ${error.message}`);
+  return data || [];
+}
+
+export async function listarJobs(limite = 50) {
+  const { data, error } = await supabase
+    .from('cola_jobs')
+    .select('id, proveedor, status, intentos, max_intentos, error, created_at, updated_at')
+    .order('created_at', { ascending: false })
+    .limit(limite);
+  if (error) throw new Error(`Error listando jobs: ${error.message}`);
+  return data || [];
+}
+
+export async function listarClientes(limite = 50) {
+  const { data, error } = await supabase
+    .from('clientes')
+    .select('numero_telefono, nombre, created_at')
+    .order('created_at', { ascending: false })
+    .limit(limite);
+  if (error) throw new Error(`Error listando clientes: ${error.message}`);
+  return data || [];
+}
+
 export async function encolarJob(proveedor, externalId, payload) {
   const id = uuidv4();
   const { data: result, error } = await supabase
@@ -474,6 +505,9 @@ export default {
   obtenerPlacaPorToken,
   marcarTokenUsado,
   obtenerStatsReporte,
+  listarOrdenes,
+  listarJobs,
+  listarClientes,
   encolarJob,
   reclamarJobsPendientes,
   marcarJobCompletado,
