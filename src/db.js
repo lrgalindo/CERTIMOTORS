@@ -120,18 +120,6 @@ export async function obtenerConversacionesPorCliente(clienteId, limite = 6) {
   return data || [];
 }
 
-export async function obtenerConversacionesPorPlaca(placa) {
-  const { data, error } = await supabase
-    .from('conversaciones')
-    .select('*')
-    .eq('placa', placa)
-    .order('created_at', { ascending: false })
-    .limit(10);
-
-  if (error) throw new Error(`Error fetching conversations: ${error.message}`);
-  return data || [];
-}
-
 export async function guardarConversacion(placa, cliente_id, tipo_usuario, mensaje_entrada, respuesta_ia, tokens = 0) {
   const id = uuidv4();
   const { data: result, error } = await supabase
@@ -254,22 +242,6 @@ export async function obtenerNotificacionesPorPlaca(placa) {
 
   if (error) throw new Error(`Error fetching notifications by placa: ${error.message}`);
   return data || [];
-}
-
-export async function obtenerNotificacionesPendientes() {
-  const { data, error } = await supabase
-    .from('notificaciones')
-    .select('*')
-    .eq('enviado', false)
-    .order('created_at', { ascending: true });
-
-  if (error) throw new Error(`Error fetching pending notifications: ${error.message}`);
-  return data || [];
-}
-
-export async function marcarNotificacionEnviada(id) {
-  const { error } = await supabase.from('notificaciones').update({ enviado: true }).eq('id', id);
-  if (error) throw new Error(`Error marking notification as sent: ${error.message}`);
 }
 
 export async function registrarCostoAPI({ rol, modelo, tipoTarea, tokensInput, tokensOutput, tokensCacheCreation = 0, tokensCacheRead = 0, costoUsd, placa = null }) {
@@ -529,7 +501,6 @@ export default {
   guardarCertificado,
   obtenerUltimaOrdenPorCliente,
   obtenerConversacionesPorCliente,
-  obtenerConversacionesPorPlaca,
   guardarConversacion,
   guardarRevision,
   obtenerRevisionesPorPlaca,
@@ -539,8 +510,6 @@ export default {
   obtenerNotificacionesPorPlacaYTipos,
   asegurarBucketCertificados,
   subirCertificado,
-  obtenerNotificacionesPendientes,
-  marcarNotificacionEnviada,
   registrarCostoAPI,
   obtenerGastoDesde,
   obtenerEstadisticas,
