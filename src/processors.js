@@ -50,6 +50,28 @@ export function esComandoBot(message) {
   return Boolean(message?.entities?.some((e) => e.type === 'bot_command' && e.offset === 0));
 }
 
+// Persiste la foto del mecánico para el registro fotográfico del PDF v2.
+// Best-effort: si la migración 008 no está aplicada o Storage falla, se loggea
+// y la inspección sigue — la foto ya viajó a Claude para el análisis igual.
+// `contentUser` es el array de bloques de construirContentConImagen.
+async function guardarFotoInspeccionSegura(db, placa, contentUser, hallazgos, texto) {
+  try {
+    const bloqueImagen = Array.isArray(contentUser) && contentUser.find((b) => b.type === 'image');
+    if (!bloqueImagen) return;
+
+    const relevante = hallazgos.find((h) => h.estado === 'MAL') || hallazgos.find((h) => h.estado === 'REGULAR') || hallazgos[0];
+    const caption = relevante?.nombre_punto || (texto || '').slice(0, 60) || 'Hallazgo';
+
+    await db.asegurarBucketFotos();
+    const buffer = Buffer.from(bloqueImagen.source.data, 'base64');
+    const ruta = await db.subirFotoInspeccion(placa, buffer, bloqueImagen.source.media_type);
+    await db.guardarFotoInspeccion({ placa, punto: relevante?.punto ?? null, caption, storagePath: ruta });
+    logger.success('Foto de inspección guardada', { placa, caption });
+  } catch (error) {
+    logger.warn('No se pudo guardar la foto de inspección (¿migración 008 pendiente?)', { placa, error: error.message });
+  }
+}
+
 async function resolverPlacaActivaMecanico(db, mecanicoId) {
   const ultimaPlaca = await db.obtenerUltimaPlacaPorMecanico(mecanicoId);
   if (!ultimaPlaca) return null;
@@ -81,12 +103,13 @@ async function construirContentConImagen(texto, mediaId, canal, botToken) {
       });
       bloques.push({ type: 'image', source: { type: 'base64', media_type: contentType, data: base64 } });
     } else if (canal === 'telegram') {
-      const fileResp = await axios.get(`https://api.telegram.org/bot${botToken}/getFile`, {
+      const tgBase = process.env.TELEGRAM_API_URL || 'https://api.telegram.org';
+      const fileResp = await axios.get(`${tgBase}/bot${botToken}/getFile`, {
         params: { file_id: mediaId },
       });
       const filePath = fileResp.data.result.file_path;
       const { base64, contentType } = await descargarImagenBase64(
-        `https://api.telegram.org/file/bot${botToken}/${filePath}`
+        `${tgBase}/file/bot${botToken}/${filePath}`
       );
       bloques.push({ type: 'image', source: { type: 'base64', media_type: contentType, data: base64 } });
     }
@@ -497,6 +520,10 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
     }
     const detalle = [hallazgo.estado, hallazgo.nombre_punto, hallazgo.observacion].filter(Boolean).join(' - ');
     await db.guardarRevision(placa, telegram_id, hallazgo.punto, detalle);
+  }
+
+  if (hasPhoto) {
+    await guardarFotoInspeccionSegura(db, placa, contentUser, hallazgos, texto);
   }
 
   if (inspeccionCompleta) {

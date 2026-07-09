@@ -187,6 +187,57 @@ test('procesarTelegramMecanico: degradación graceful si falla descarga de image
   delete process.env.ANTHROPIC_API_URL;
 });
 
+test('procesarTelegramMecanico: photo[] descargable se sube al bucket y se asocia al hallazgo (PDF v2)', async () => {
+  // Fake de Telegram API: getFile + descarga del archivo.
+  const fakePng = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  const tgServer = http.createServer((req, res) => {
+    if (req.url.includes('/getFile')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, result: { file_path: 'photos/f.png' } }));
+    } else {
+      res.writeHead(200, { 'content-type': 'image/png' });
+      res.end(fakePng);
+    }
+  });
+  await new Promise((r) => tgServer.listen(0, r));
+  process.env.TELEGRAM_API_URL = `http://127.0.0.1:${tgServer.address().port}`;
+
+  const { server, url } = await crearServidorClaudeFake(() =>
+    toolUseResponse('registrar_inspeccion', {
+      hallazgos: [{ punto: 23, nombre_punto: 'Buje superior izquierdo', estado: 'MAL' }],
+      inspeccion_completa: false,
+      respuesta_mecanico: 'Anotado.',
+    })
+  );
+  process.env.ANTHROPIC_API_URL = url;
+
+  const fotosGuardadas = [];
+  const db = crearDbFake();
+  db.asegurarBucketFotos = async () => {};
+  db.subirFotoInspeccion = async (placa, buffer, contentType) => {
+    assert.ok(buffer.equals(fakePng));
+    return `${placa}/foto.png`;
+  };
+  db.guardarFotoInspeccion = async (fila) => fotosGuardadas.push(fila);
+
+  await procesarTelegramMecanico(
+    db,
+    fotoTelegram({ caption: 'placa P926FTB buje roto' }),
+    'fake-token',
+    'fake-key'
+  );
+
+  assert.equal(fotosGuardadas.length, 1);
+  assert.equal(fotosGuardadas[0].placa, 'P926FTB');
+  assert.equal(fotosGuardadas[0].punto, 23);
+  assert.equal(fotosGuardadas[0].caption, 'Buje superior izquierdo');
+
+  tgServer.close();
+  server.close();
+  delete process.env.ANTHROPIC_API_URL;
+  delete process.env.TELEGRAM_API_URL;
+});
+
 test('procesarTelegramTramitador: photo[] con caption que incluye placa se procesa sin error', async () => {
   const { server, url } = await crearServidorClaudeFake(() =>
     toolUseResponse('registrar_avance_tramite', {

@@ -383,6 +383,49 @@ export async function obtenerStatsReporte() {
   };
 }
 
+// ─── Fotos de inspección (bucket privado, separado de certificados) ──────────
+// Requiere la migración 008 (tabla fotos_inspeccion). El bucket es privado:
+// las fotos solo se leen desde el backend (service key) al generar el PDF.
+
+export async function asegurarBucketFotos() {
+  const { data: buckets, error } = await supabase.storage.listBuckets();
+  if (error) throw new Error(`Error listando buckets de Storage: ${error.message}`);
+  if ((buckets || []).some((b) => b.name === 'fotos-inspeccion')) return;
+  const { error: createError } = await supabase.storage.createBucket('fotos-inspeccion', { public: false });
+  if (createError) throw new Error(`Error creando bucket fotos-inspeccion: ${createError.message}`);
+}
+
+export async function subirFotoInspeccion(placa, buffer, contentType = 'image/jpeg') {
+  const extension = contentType.split('/')[1] || 'jpg';
+  const ruta = `${placa}/${uuidv4()}.${extension}`;
+  const { error } = await supabase.storage.from('fotos-inspeccion').upload(ruta, buffer, { contentType });
+  if (error) throw new Error(`Error subiendo foto de inspección: ${error.message}`);
+  return ruta;
+}
+
+export async function guardarFotoInspeccion({ placa, punto = null, caption = null, storagePath }) {
+  const { error } = await supabase
+    .from('fotos_inspeccion')
+    .insert([{ id: uuidv4(), placa, punto, caption, storage_path: storagePath }]);
+  if (error) throw new Error(`Error guardando foto de inspección: ${error.message}`);
+}
+
+export async function obtenerFotosPorPlaca(placa) {
+  const { data, error } = await supabase
+    .from('fotos_inspeccion')
+    .select('*')
+    .eq('placa', placa)
+    .order('created_at', { ascending: true });
+  if (error) throw new Error(`Error obteniendo fotos de inspección: ${error.message}`);
+  return data || [];
+}
+
+export async function descargarFoto(storagePath) {
+  const { data, error } = await supabase.storage.from('fotos-inspeccion').download(storagePath);
+  if (error) throw new Error(`Error descargando foto de inspección: ${error.message}`);
+  return Buffer.from(await data.arrayBuffer());
+}
+
 // ─── Listados de solo lectura para el backoffice ─────────────────────────────
 
 export async function listarOrdenes({ status = null, placa = null, limite = 50 } = {}) {
@@ -505,6 +548,11 @@ export default {
   obtenerPlacaPorToken,
   marcarTokenUsado,
   obtenerStatsReporte,
+  asegurarBucketFotos,
+  subirFotoInspeccion,
+  guardarFotoInspeccion,
+  obtenerFotosPorPlaca,
+  descargarFoto,
   listarOrdenes,
   listarJobs,
   listarClientes,
