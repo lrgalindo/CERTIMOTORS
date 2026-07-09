@@ -59,7 +59,12 @@ async function guardarFotoInspeccionSegura(db, placa, contentUser, hallazgos, te
     const bloqueImagen = Array.isArray(contentUser) && contentUser.find((b) => b.type === 'image');
     if (!bloqueImagen) return;
 
-    const relevante = hallazgos.find((h) => h.estado === 'MAL') || hallazgos.find((h) => h.estado === 'REGULAR') || hallazgos[0];
+    // Solo hallazgos válidos (mismo criterio que guardarRevision): un punto
+    // fuera de rango de Claude no debe terminar como referencia de la foto.
+    const validos = hallazgos.filter(
+      (h) => Number.isInteger(h.punto) && h.punto >= 1 && h.punto <= 110 && ESTADOS_HALLAZGO.includes(h.estado)
+    );
+    const relevante = validos.find((h) => h.estado === 'MAL') || validos.find((h) => h.estado === 'REGULAR') || validos[0];
     const caption = relevante?.nombre_punto || (texto || '').slice(0, 60) || 'Hallazgo';
 
     await db.asegurarBucketFotos();

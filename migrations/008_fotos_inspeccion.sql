@@ -19,9 +19,11 @@ ALTER TABLE fotos_inspeccion ENABLE ROW LEVEL SECURITY;
 
 -- Retención: purgar fotos crudas a los 120 días (90 de garantía + 30 de
 -- margen). El PDF ya generado no se toca — lleva las fotos embebidas.
--- Nota: borrar de storage.objects vía SQL elimina la referencia del objeto;
--- Supabase reconcilia el archivo físico. Si quedaran huérfanos en el bucket,
--- limpiarlos desde el dashboard es cosmético (ya no son accesibles por API).
+-- Nota: borrar de storage.objects vía SQL elimina los metadatos, con lo que
+-- la foto deja de ser accesible por CUALQUIER API (privacidad cumplida).
+-- El blob físico puede quedar huérfano en el object store ocupando espacio.
+-- ponytail: purga por SQL; si el espacio del bucket crece, agregar un job de
+-- Node que llame storage.remove() antes del DELETE.
 CREATE EXTENSION IF NOT EXISTS pg_cron;
 
 SELECT cron.schedule(
