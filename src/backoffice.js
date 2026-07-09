@@ -8,6 +8,7 @@ import { verificarPresupuesto } from './budget-tracker.js';
 // credenciales configuradas responde 503 en vez de quedar abierto.
 
 function igualdadConstante(a, b) {
+  if (!a || !b) return false;
   const bufA = Buffer.from(String(a));
   const bufB = Buffer.from(String(b));
   return bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
