@@ -13,4 +13,10 @@ ALTER VIEW estadisticas_diarias SET (security_invoker = true);
 
 -- 3. El RPC de reclamo de jobs era ejecutable por anon/authenticated:
 --    cualquiera con la anon key podía marcar jobs como 'procesando'.
-REVOKE EXECUTE ON FUNCTION reclamar_jobs_pendientes(integer) FROM anon, authenticated;
+--    PUBLIC va incluido: Postgres da EXECUTE a PUBLIC por default y revocar
+--    solo anon/authenticated no cierra nada (verificado en proacl 8 Jul 2026).
+--    service_role conserva su grant explícito — el worker no se ve afectado.
+REVOKE EXECUTE ON FUNCTION reclamar_jobs_pendientes(integer) FROM PUBLIC, anon, authenticated;
+
+-- Reversa (si algo fallara): ALTER TABLE ... DISABLE ROW LEVEL SECURITY;
+-- ALTER VIEW ... SET (security_invoker = false); GRANT EXECUTE ... TO PUBLIC;
