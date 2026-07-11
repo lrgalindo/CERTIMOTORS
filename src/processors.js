@@ -77,6 +77,13 @@ async function guardarFotoInspeccionSegura(db, placa, contentUser, hallazgos, te
   }
 }
 
+// Último mensaje que el bot le mandó a cada mecánico. Sin esto, cada mensaje
+// es un turno aislado y una respuesta como "No" a la pregunta de confirmación
+// de cierre no tiene referente (incidente 9 Jul 2026: el bot la trató como
+// hallazgo ambiguo). ponytail: en memoria — un solo worker; si el proceso
+// reinicia a mitad de conversación, degrada al comportamiento anterior.
+const ultimaRespuestaBotMecanico = new Map();
+
 async function resolverPlacaActivaMecanico(db, mecanicoId) {
   const ultimaPlaca = await db.obtenerUltimaPlacaPorMecanico(mecanicoId);
   if (!ultimaPlaca) return null;
@@ -498,7 +505,13 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
     contentUser = texto;
   }
 
-  const systemPrompt = prompts.construirSystemPromptMecanico(placa, orden.tipo_auto, puntosCompletados, ultimosHallazgos);
+  const systemPrompt = prompts.construirSystemPromptMecanico(
+    placa,
+    orden.tipo_auto,
+    puntosCompletados,
+    ultimosHallazgos,
+    ultimaRespuestaBotMecanico.get(telegram_id) || null
+  );
   const {
     hallazgos = [],
     inspeccion_completa: inspeccionCompleta = false,
@@ -559,6 +572,7 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
     }
   }
 
+  ultimaRespuestaBotMecanico.set(telegram_id, respuesta);
   await enviarMensajeTelegram(botToken, chatId, respuesta);
   logger.success('Mechanic response sent', { placa, hallazgos: hallazgos.length, inspeccionCompleta });
 }

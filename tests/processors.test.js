@@ -596,6 +596,45 @@ test('procesarPagoRecurrente: ignora eventos que no son pago exitoso', async () 
   assert.equal(db._ordenes.P926FTB.status, 'INICIADA');
 });
 
+// ─── Contexto del último mensaje del bot al mecánico (incidente "No", 9 Jul) ──
+
+test('procesarTelegramMecanico: el segundo turno recibe el último mensaje del bot como contexto', async () => {
+  const systemsRecibidos = [];
+  const { server, url } = await crearServidorClaudeFake((body) => {
+    if (body.messaging_product) return { ok: true };
+    systemsRecibidos.push(body.system?.[0]?.text || '');
+    return toolUseResponse('registrar_inspeccion', {
+      hallazgos: [],
+      inspeccion_completa: false,
+      respuesta_mecanico: '¿Confirmás que terminaste la inspección de P926FTB?',
+    });
+  });
+  process.env.ANTHROPIC_API_URL = url;
+
+  try {
+    // "No" no trae placa: el flujo la resuelve por la última inspección activa.
+    const db = crearDbFake({ obtenerUltimaPlacaPorMecanico: async () => 'P926FTB' });
+    // telegram_id propio para no heredar estado del Map de otros tests
+    const payload = (texto) => {
+      const p = mensajeTelegram(texto);
+      p.message.from.id = 777001;
+      return p;
+    };
+    await procesarTelegramMecanico(db, payload('placa P926FTB ninguna adicional'), undefined, 'fake-key');
+    await procesarTelegramMecanico(db, payload('No'), undefined, 'fake-key');
+
+    assert.equal(systemsRecibidos.length, 2);
+    assert.ok(systemsRecibidos[0].includes('(Ninguno — es el primer intercambio de esta sesión)'));
+    assert.ok(
+      systemsRecibidos[1].includes('¿Confirmás que terminaste la inspección de P926FTB?'),
+      'el segundo turno debe llevar la pregunta de confirmación previa como contexto'
+    );
+  } finally {
+    server.close();
+    delete process.env.ANTHROPIC_API_URL;
+  }
+});
+
 // ─── Comandos de bot (/start) — incidente jobs huérfanos jul 2026 ─────────────
 
 import { esComandoBot } from '../src/processors.js';
