@@ -355,6 +355,18 @@ export async function obtenerStatsReporte() {
   };
 }
 
+// ─── Estado de conversación (máquina de estados WhatsApp) ────────────────────
+// JSONB en clientes: las etapas 0-3 ocurren antes de que exista una orden.
+// Requiere la migración 009.
+
+export async function actualizarEstadoConversacion(clienteId, estado) {
+  const { error } = await supabase
+    .from('clientes')
+    .update({ estado_conversacion: estado, updated_at: new Date().toISOString() })
+    .eq('id', clienteId);
+  if (error) throw new Error(`Error actualizando estado de conversación: ${error.message}`);
+}
+
 // ─── Fotos de inspección (bucket privado, separado de certificados) ──────────
 // Requiere la migración 008 (tabla fotos_inspeccion). El bucket es privado:
 // las fotos solo se leen desde el backend (service key) al generar el PDF.
@@ -517,6 +529,7 @@ export default {
   obtenerPlacaPorToken,
   marcarTokenUsado,
   obtenerStatsReporte,
+  actualizarEstadoConversacion,
   asegurarBucketFotos,
   subirFotoInspeccion,
   guardarFotoInspeccion,

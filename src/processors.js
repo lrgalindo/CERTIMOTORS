@@ -8,6 +8,7 @@ import { TOOL_REGISTRAR_INSPECCION, TOOL_REGISTRAR_AVANCE_TRAMITE } from './tool
 import { validarOrden } from './validar-orden.js';
 import { generarCertificado } from './pdf-generator.js';
 import { notificarAprobacionAdmin, ADMIN_CHAT_ID } from './pdf-approval.js';
+import { estadoInicial, actualizarEstado, extraerDatos, contextoParaPrompt } from './estado-conversacion.js';
 
 export const SERVICIOS = {
   BASICO: { etiqueta: 'BÁSICO', precio: 'Q550', cents: 55000 },
@@ -253,7 +254,18 @@ async function confirmarServicio(db, placa, servicio) {
   return crearCheckoutRecurrente(placa, servicio);
 }
 
+// Persistencia best-effort del estado: si la migración 009 no está aplicada,
+// se loggea y la conversación sigue (el estado simplemente no persiste).
+async function guardarEstadoSeguro(db, clienteId, estado) {
+  try {
+    await db.actualizarEstadoConversacion(clienteId, estado);
+  } catch (error) {
+    logger.warn('No se pudo persistir estado_conversacion (¿migración 009 pendiente?)', { clienteId, error: error.message });
+  }
+}
+
 export async function procesarWhatsapp(db, payload, apiKey) {
+  const t0 = Date.now();
   const messages = payload?.entry?.[0]?.changes?.[0]?.value?.messages || [];
   if (messages.length === 0) return;
 
@@ -293,6 +305,13 @@ export async function procesarWhatsapp(db, payload, apiKey) {
       const orden = await db.obtenerUltimaOrdenPorCliente(cliente.id);
       if (orden) {
         const svc = SERVICIOS[servicioBoton];
+        // Tocar un botón es elección explícita: monto confirmado por definición.
+        const estadoBoton = actualizarEstado(cliente.estado_conversacion || estadoInicial(), {
+          plan_elegido: servicioBoton,
+          monto_confirmado: true,
+          placa: orden.placa,
+        });
+        await guardarEstadoSeguro(db, cliente.id, estadoBoton);
         const url = await confirmarServicio(db, orden.placa, servicioBoton);
         const respuesta =
           `Perfecto, ${svc.etiqueta} (${svc.precio}) para tu ${orden.placa}. Podés pagar aquí: ${url}\n\n` +
@@ -358,7 +377,14 @@ export async function procesarWhatsapp(db, payload, apiKey) {
     .map((c) => `Cliente: ${c.mensaje_entrada}\nAsesor: ${c.respuesta_ia}`)
     .join('\n');
 
-  const systemPrompt = prompts.construirSystemPromptCliente(placa, orden, cliente, historialTexto, { ordenAjena });
+  // Estado explícito de la conversación: el código decide etapa y faltantes;
+  // el agente solo recibe el contexto y conversa.
+  const estadoPrevio = actualizarEstado(cliente.estado_conversacion || estadoInicial(), placa ? { placa } : {});
+
+  const systemPrompt = prompts.construirSystemPromptCliente(placa, orden, cliente, historialTexto, {
+    ordenAjena,
+    contextoEstado: contextoParaPrompt(estadoPrevio),
+  });
   const respuestaCruda = await llamarClaudeAPI(
     apiKey,
     db,
@@ -368,12 +394,22 @@ export async function procesarWhatsapp(db, payload, apiKey) {
     placa
   );
 
-  const { texto: respuestaLimpia, servicio: servicioElegido, escalar } = extraerMarcadores(respuestaCruda);
+  const { texto: sinMarcadores, servicio: servicioElegido, escalar } = extraerMarcadores(respuestaCruda);
+  const { texto: respuestaLimpia, datos } = extraerDatos(sinMarcadores);
   let respuestaFinal = respuestaLimpia;
 
-  // Elección (o cambio) de servicio detectada por el agente, solo antes del pago.
+  // [SERVICIO:X] es la elección explícita del cliente: fija plan y monto.
+  if (servicioElegido) {
+    datos.plan_elegido = servicioElegido;
+    datos.monto_confirmado = true;
+  }
+  const estado = actualizarEstado(estadoPrevio, datos);
+  await guardarEstadoSeguro(db, cliente.id, estado);
+
+  // Elección (o cambio) de servicio, solo antes del pago. El link de pago solo
+  // existe con monto_confirmado — la elección explícita es lo que lo confirma.
   const puedeElegir = orden && ['INICIADA', 'SERVICIO_PRESENTADO', 'ESPERANDO_PAGO'].includes(orden.status);
-  if (servicioElegido && puedeElegir) {
+  if (servicioElegido && puedeElegir && estado.campos.monto_confirmado) {
     const url = await confirmarServicio(db, orden.placa, servicioElegido);
     respuestaFinal = `${respuestaLimpia}\n\nPodés pagar aquí: ${url}`;
     logger.success('Servicio elegido por texto', { placa: orden.placa, servicio: servicioElegido });
@@ -392,6 +428,8 @@ export async function procesarWhatsapp(db, payload, apiKey) {
     orden && !servicioElegido && ['INICIADA', 'SERVICIO_PRESENTADO'].includes(orden.status);
   await enviarWhatsapp(numeroCliente, mostrarBotones ? mensajeBotonesServicio(respuestaFinal) : mensajeTexto(respuestaFinal));
   logger.success('Respuesta enviada al cliente por WhatsApp', { numeroCliente });
+  // Observabilidad de latencia por etapa (solo medición, sin optimizar nada).
+  logger.info('Latencia WhatsApp', { ms: Date.now() - t0, etapa: estado.etapa });
 }
 
 // Webhook de pago de Recurrente. Recurrente reintenta si respondemos non-2xx,

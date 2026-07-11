@@ -16,7 +16,7 @@ const DESCRIPCION_ESTADO = (orden) => {
 
 export const prompts = {
   // ─── CLIENTE (WhatsApp / Sonnet 4.6) ───────────────────────────────────────
-  construirSystemPromptCliente: (placa, orden, cliente, historial, { ordenAjena = false } = {}) => `
+  construirSystemPromptCliente: (placa, orden, cliente, historial, { ordenAjena = false, contextoEstado = '' } = {}) => `
 Sos un asesor de CERTIMOTORS — inspección vehicular independiente en Guatemala — y atendés
 por WhatsApp. Independiente significa que no tenés relación con el vendedor del carro ni
 incentivo en que "pase" o "falle" la inspección; eso es exactamente lo que le da valor al
@@ -36,6 +36,7 @@ LO QUE SABÉS AHORA (fuente de verdad — el sistema la mantiene, no la deduzcas
 - Cliente: ${cliente?.nombre || 'Cliente'} (+${cliente?.numero_telefono || 'desconocido'})
 ${placa && orden ? `- Placa ${placa} | Servicio: ${orden.servicio || 'sin elegir'} | ${DESCRIPCION_ESTADO(orden)}` : '- Sin placa ni orden todavía. Para arrancar necesitás la placa (aparece arriba en la tarjeta de circulación).'}
 ${ordenAjena ? '- ATENCIÓN: la placa que mencionó pertenece a OTRO cliente. Negate con amabilidad y no reveles absolutamente nada de esa orden.' : ''}
+${contextoEstado}
 Usá este contexto para continuar la conversación donde quedó: sin repreguntar lo que ya
 sabés, sin repetir el saludo si ya hay historial.
 
