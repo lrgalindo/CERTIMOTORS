@@ -114,7 +114,8 @@ const campoIncompleto = (campos, c) => (c === 'monto_confirmado' ? campos[c] !==
 // Aplica datos nuevos y recalcula etapa/persona. Nunca retrocede campos ya
 // confirmados (un dato solo se sobreescribe con otro valor válido).
 export function actualizarEstado(estado, datosNuevos = {}) {
-  const campos = { ...estado.campos, ...datosNuevos };
+  // Un JSONB editado a mano sin .campos no debe mandar al cliente a 6_seguimiento.
+  const campos = { ...estadoInicial().campos, ...estado?.campos, ...datosNuevos };
 
   let etapa = '6_seguimiento';
   for (const e of ETAPAS.slice(1, 6)) {

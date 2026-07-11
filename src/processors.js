@@ -610,7 +610,10 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
     }
   }
 
-  ultimaRespuestaBotMecanico.set(telegram_id, respuesta);
+  // Al cerrar una inspección, el contexto de esa conversación ya no aplica a
+  // la siguiente placa — se descarta en vez de arrastrarlo.
+  if (inspeccionCompleta) ultimaRespuestaBotMecanico.delete(telegram_id);
+  else ultimaRespuestaBotMecanico.set(telegram_id, respuesta);
   await enviarMensajeTelegram(botToken, chatId, respuesta);
   logger.success('Mechanic response sent', { placa, hallazgos: hallazgos.length, inspeccionCompleta });
 }
