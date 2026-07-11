@@ -66,6 +66,16 @@ test('camposFaltantes y contextoParaPrompt reflejan solo lo que falta de la etap
   assert.ok(!ctx.includes('placa,'), 'no debe pedir datos ya confirmados');
 });
 
+test('es_dueno=false es respuesta completa, no campo faltante (bug e2e 11 Jul)', () => {
+  const e = actualizarEstado(estadoInicial(), {
+    plan_elegido: 'BASICO', nombre: 'Carlos', telefono_confirmado: '50255551234',
+    placa: 'P777CCC', marca: 'Honda', modelo: 'Civic', anio: 2018, zona: 'VILLA NUEVA',
+    es_dueno: false,
+  });
+  assert.equal(e.etapa, '4_agendamiento', 'no-dueño con vehículo completo debe avanzar de etapa');
+  assert.ok(!camposFaltantes(e).includes('es_dueno'));
+});
+
 test('un dato ya confirmado no se borra con una actualización vacía', () => {
   const e1 = actualizarEstado(estadoInicial(), { anio: 2019 });
   const e2 = actualizarEstado(e1, {});

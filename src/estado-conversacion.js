@@ -107,6 +107,10 @@ export function extraerDatos(respuesta) {
   return { texto, datos };
 }
 
+// Un campo está incompleto si es null; monto_confirmado además exige true
+// (es_dueno=false es una respuesta válida y completa — "no soy el dueño").
+const campoIncompleto = (campos, c) => (c === 'monto_confirmado' ? campos[c] !== true : campos[c] === null);
+
 // Aplica datos nuevos y recalcula etapa/persona. Nunca retrocede campos ya
 // confirmados (un dato solo se sobreescribe con otro valor válido).
 export function actualizarEstado(estado, datosNuevos = {}) {
@@ -114,8 +118,7 @@ export function actualizarEstado(estado, datosNuevos = {}) {
 
   let etapa = '6_seguimiento';
   for (const e of ETAPAS.slice(1, 6)) {
-    const faltan = CAMPOS_POR_ETAPA[e].some((c) => campos[c] === null || campos[c] === false);
-    if (faltan) {
+    if (CAMPOS_POR_ETAPA[e].some((c) => campoIncompleto(campos, c))) {
       etapa = e;
       break;
     }
@@ -126,7 +129,7 @@ export function actualizarEstado(estado, datosNuevos = {}) {
 
 export function camposFaltantes(estado) {
   const requeridos = CAMPOS_POR_ETAPA[estado.etapa] || [];
-  return requeridos.filter((c) => estado.campos[c] === null || estado.campos[c] === false);
+  return requeridos.filter((c) => campoIncompleto(estado.campos, c));
 }
 
 // Bloque de contexto que se inyecta al system prompt del cliente. El resto del
