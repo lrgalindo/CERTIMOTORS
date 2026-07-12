@@ -11,8 +11,9 @@ ${placa ? `- Placa en gestión: ${placa}` : '- Sin placa registrada aún'}
 ${orden ? `- Orden: ${orden.id} | Estado: ${orden.status} | Servicio: ${orden.servicio || 'ESTÁNDAR'}` : '- Sin orden activa'}
 
 SERVICIOS Y PRECIOS:
-- ESTÁNDAR Q650: inspección de 110 puntos + certificado PDF (2 páginas)
-- FULL Q1,200: inspección + verificación legal (impuesto, calcomanía, multas, gravámenes) + certificado PDF (3 páginas)
+- SCANNER Q300: escaneo electrónico OBD-II + reporte de códigos de error
+- ESTÁNDAR Q550: inspección de 110 puntos + certificado PDF (2 páginas)
+- FULL Q800: inspección + verificación legal (impuesto, calcomanía, multas, gravámenes) + certificado PDF (3 páginas)
 
 FLUJO QUE DEBES GUIAR:
 1. Si no hay placa → pedirla. Si el cliente no la sabe: "¿Tienes tu tarjeta de circulación a la mano? La placa aparece en la parte superior 🚗"
