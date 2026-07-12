@@ -409,6 +409,14 @@ export async function obtenerOrdenPorCheckoutId(checkoutId) {
   return data;
 }
 
+export async function marcarOrdenNotificada(ordenId) {
+  const { error } = await supabase
+    .from('ordenes')
+    .update({ notificado_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq('id', ordenId);
+  if (error) throw new Error(`Error marcando orden notificada: ${error.message}`);
+}
+
 export async function encolarJob(proveedor, externalId, payload) {
   const id = uuidv4();
   const { data: result, error } = await supabase
@@ -484,6 +492,7 @@ export default {
   obtenerPlacaPorToken,
   marcarTokenUsado,
   obtenerStatsReporte,
+  marcarOrdenNotificada,
   encolarJob,
   reclamarJobsPendientes,
   marcarJobCompletado,

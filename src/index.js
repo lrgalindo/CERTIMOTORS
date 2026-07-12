@@ -12,7 +12,7 @@ import generalRateLimit from './ratelimit.js';
 import { llamarClaudeAPI } from './claude-client.js';
 import { verificarPresupuesto } from './budget-tracker.js';
 import { iniciarWorker } from './worker.js';
-import { registrarWebhookTelegram, enviarMensajeTelegram } from './telegram-client.js';
+import { registrarWebhookTelegram } from './telegram-client.js';
 import { verificarFirmaWhatsapp, verificarSecretoTelegram, verificarFirmaRecurrente } from './webhook-security.js';
 import { validarOrden } from './validar-orden.js';
 
@@ -427,79 +427,15 @@ app.post('/webhook/recurrente', async (req, res) => {
     await db.crearNotificacion(orden.placa, 'PAGO_CONFIRMADO', `Pago confirmado vía web (checkout ${checkoutId || 'N/D'})`);
     logger.success('Payment confirmed via web', { placa: orden.placa, servicio: orden.servicio });
 
-    const cliente = await db.obtenerClientePorId(orden.cliente_id);
-    await notificarEquipo(orden, cliente);
+    // Encola la notificación a Telegram como job reintentable.
+    // Si Telegram está caído o el chat_id es inválido, el worker reintenta con
+    // backoff exponencial en vez de perder la notificación silenciosamente.
+    await db.encolarJob('notificar_equipo', orden.id, { orden_id: orden.id });
   } catch (error) {
     METRICS.totalErrors++;
     logger.error('Recurrente webhook processing error', { error: error.message });
   }
 });
-
-// Helper: mensajes Telegram determinísticos (sin tocar prompts.js)
-function mensajeMecanico(orden, cliente) {
-  const icono  = orden.servicio === 'SCANNER' ? '🔍' : '🚗';
-  const tarea  = {
-    SCANNER:  'Solo escaneo OBD-II.',
-    ESTANDAR: 'Inspección técnica completa — 110 puntos.',
-    FULL:     'Inspección 110 puntos + verificación legal.\nEl tramitador también fue notificado.',
-  }[orden.servicio] || '';
-  const fecha  = orden.fecha_preferida
-    ? new Date(orden.fecha_preferida).toLocaleDateString('es-GT')
-    : 'Por confirmar';
-  const tel = cliente?.numero_telefono ? `+${cliente.numero_telefono}` : 'N/D';
-
-  return `${icono} <b>NUEVA ORDEN · ${orden.servicio}</b>
-
-<b>Placa:</b> <code>${orden.placa}</code>
-<b>Cliente:</b> ${orden.nombre_cliente || 'N/D'}
-<b>Tel:</b> ${tel}
-<b>Zona:</b> ${orden.zona || 'N/D'}
-<b>Fecha preferida:</b> ${fecha}
-
-${tarea}
-<i>Registra la placa en el bot para iniciar.</i>`;
-}
-
-function mensajeTramitador(orden, cliente) {
-  const tel = cliente?.numero_telefono ? `+${cliente.numero_telefono}` : 'N/D';
-  return `📋 <b>NUEVA ORDEN · FULL (TRÁMITE)</b>
-
-<b>Placa:</b> <code>${orden.placa}</code>
-<b>Cliente:</b> ${orden.nombre_cliente || 'N/D'}
-<b>Tel:</b> ${tel}
-
-Verificaciones: impuesto circulación, calcomanía, multas, gravámenes.
-<i>Registra la placa en tu bot cuando el mecánico confirme la inspección.</i>`;
-}
-
-async function notificarEquipo(orden, cliente) {
-  const promesas = [
-    enviarMensajeTelegram(
-      CONFIG.TELEGRAM_MECANICO_BOT_TOKEN,
-      CONFIG.TELEGRAM_MECANICO_CHAT_ID,
-      mensajeMecanico(orden, cliente)
-    ),
-  ];
-
-  if (orden.servicio === 'FULL' && CONFIG.TELEGRAM_TRAMITADOR_CHAT_ID) {
-    promesas.push(
-      enviarMensajeTelegram(
-        CONFIG.TELEGRAM_TRAMITADOR_BOT_TOKEN,
-        CONFIG.TELEGRAM_TRAMITADOR_CHAT_ID,
-        mensajeTramitador(orden, cliente)
-      )
-    );
-  }
-
-  const resultados = await Promise.allSettled(promesas);
-  resultados.forEach((r, i) => {
-    if (r.status === 'rejected') {
-      logger.error(`Telegram notification failed (index ${i})`, { error: r.reason?.message });
-    }
-  });
-}
-
-// ── FIN CHECKOUT WEB ──────────────────────────────────────────────────────────
 
 app.use((req, res) => {
   handleError(new AppError('Ruta no encontrada', 404), res);

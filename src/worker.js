@@ -2,6 +2,7 @@ import * as db from './db.js';
 import { logger } from './logger.js';
 import { procesarWhatsapp, procesarTelegramMecanico, procesarTelegramTramitador } from './processors.js';
 import { procesarCallbackAdmin } from './pdf-approval.js';
+import { notificarEquipo } from './notificaciones.js';
 import { QUEUE_CONCURRENCY, QUEUE_POLL_INTERVAL_MS, calcularProximoIntento } from './queue.js';
 
 const CONFIG = {
@@ -18,6 +19,14 @@ const PROCESADORES = {
     procesarTelegramTramitador(db, payload, CONFIG.TELEGRAM_TRAMITADOR_BOT_TOKEN, CONFIG.ANTHROPIC_API_KEY),
   telegram_admin_callback: (payload) =>
     procesarCallbackAdmin(db, payload, CONFIG.TELEGRAM_MECANICO_BOT_TOKEN),
+  notificar_equipo: async ({ orden_id }) => {
+    const orden = await db.obtenerOrdenPorId(orden_id);
+    if (!orden) throw new Error(`Orden ${orden_id} no encontrada`);
+    if (orden.notificado_at) return; // idempotencia: ya notificado en intento anterior
+    const cliente = await db.obtenerClientePorId(orden.cliente_id);
+    await notificarEquipo(orden, cliente);  // lanza si falla → worker reintenta
+    await db.marcarOrdenNotificada(orden_id);
+  },
 };
 
 export async function procesarJob({ db: dbDep, procesadores }, job) {

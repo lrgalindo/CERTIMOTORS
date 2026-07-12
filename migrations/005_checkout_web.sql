@@ -2,12 +2,15 @@
 -- Todas las columnas son ADD IF NOT EXISTS — aditivas, no rompen el flujo WhatsApp existente.
 
 ALTER TABLE ordenes
-  ADD COLUMN IF NOT EXISTS canal_origen           VARCHAR(20)  DEFAULT 'whatsapp',
+  ADD COLUMN IF NOT EXISTS canal_origen           VARCHAR(20)   DEFAULT 'whatsapp',
   ADD COLUMN IF NOT EXISTS nombre_cliente         VARCHAR(255),
   ADD COLUMN IF NOT EXISTS email                  VARCHAR(255),
   ADD COLUMN IF NOT EXISTS zona                   VARCHAR(100),
   ADD COLUMN IF NOT EXISTS fecha_preferida        DATE,
-  ADD COLUMN IF NOT EXISTS recurrente_checkout_id TEXT;
+  ADD COLUMN IF NOT EXISTS recurrente_checkout_id TEXT,
+  -- Cuándo se notificó al equipo. NULL = pendiente de notificación.
+  -- Reconciliación: SELECT * FROM ordenes WHERE status = 'PAGADA' AND notificado_at IS NULL
+  ADD COLUMN IF NOT EXISTS notificado_at          TIMESTAMPTZ;
 
 -- Índice único sparse: aplica solo a filas donde recurrente_checkout_id no es NULL.
 -- Las órdenes de WhatsApp (NULL) no colisionan entre sí.
