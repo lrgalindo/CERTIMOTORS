@@ -1,17 +1,19 @@
 import 'dotenv/config.js';
 import express from 'express';
 import compression from 'compression';
+import rateLimit from 'express-rate-limit';
+import axios from 'axios';
 import * as db from './db.js';
 import { prompts } from './prompts.js';
 import { logger } from './logger.js';
 import { handleError, AppError } from './errors.js';
 import { validatePlaca } from './validators.js';
-import rateLimit from './ratelimit.js';
+import generalRateLimit from './ratelimit.js';
 import { llamarClaudeAPI } from './claude-client.js';
 import { verificarPresupuesto } from './budget-tracker.js';
 import { iniciarWorker } from './worker.js';
-import { registrarWebhookTelegram } from './telegram-client.js';
-import { verificarFirmaWhatsapp, verificarSecretoTelegram } from './webhook-security.js';
+import { registrarWebhookTelegram, enviarMensajeTelegram } from './telegram-client.js';
+import { verificarFirmaWhatsapp, verificarSecretoTelegram, verificarFirmaRecurrente } from './webhook-security.js';
 import { validarOrden } from './validar-orden.js';
 
 const app = express();
@@ -23,7 +25,38 @@ app.use(
   })
 );
 app.use(compression());
-app.use(rateLimit);
+app.use(generalRateLimit);
+
+// Rate limiter más estricto para endpoints de checkout (pago real)
+const checkoutLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: 'Demasiadas solicitudes, intenta más tarde',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// CORS para el checkout web (certimotors.com → certimotors.onrender.com)
+const corsCheckout = (req, res, next) => {
+  const origin = req.get('Origin') || '';
+  const allowedOrigins = (CONFIG.CORS_ORIGIN || 'https://certimotors.com').split(',').map(o => o.trim());
+  if (allowedOrigins.includes(origin) || CONFIG.NODE_ENV !== 'production') {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', 'https://certimotors.com');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+};
+
+// Planes válidos: nombre → monto en centavos de GTQ
+const PLANES = {
+  SCANNER:  { label: 'Inspección SCANNER — CERTIMOTORS',                      centavos: 30000 },
+  ESTANDAR: { label: 'Inspección ESTÁNDAR 110 puntos — CERTIMOTORS',          centavos: 55000 },
+  FULL:     { label: 'Inspección FULL + Verificación Legal — CERTIMOTORS',    centavos: 80000 },
+};
 
 const CONFIG = {
   PORT: process.env.PORT || 3000,
@@ -36,6 +69,13 @@ const CONFIG = {
   TELEGRAM_TRAMITADOR_WEBHOOK_SECRET: process.env.TELEGRAM_TRAMITADOR_WEBHOOK_SECRET,
   PUBLIC_URL: process.env.PUBLIC_URL || 'http://localhost:3000',
   NODE_ENV: process.env.NODE_ENV || 'development',
+  // Checkout web
+  RECURRENTE_SECRET_KEY:       process.env.RECURRENTE_SECRET_KEY,
+  RECURRENTE_WEBHOOK_SECRET:   process.env.RECURRENTE_WEBHOOK_SECRET,
+  TELEGRAM_MECANICO_CHAT_ID:   process.env.TELEGRAM_MECANICO_CHAT_ID,
+  TELEGRAM_TRAMITADOR_CHAT_ID: process.env.TELEGRAM_TRAMITADOR_CHAT_ID,
+  WEB_URL:     process.env.WEB_URL     || 'https://certimotors.com',
+  CORS_ORIGIN: process.env.CORS_ORIGIN || 'https://certimotors.com',
 };
 
 const METRICS = {
@@ -240,6 +280,226 @@ app.post('/api/reporte-diario', async (req, res) => {
     handleError(error, res);
   }
 });
+
+// ── CHECKOUT WEB ─────────────────────────────────────────────────────────────
+
+// POST /api/ordenes — registra cliente + orden antes del pago (status PENDIENTE_PAGO)
+app.options('/api/ordenes', corsCheckout);
+app.post('/api/ordenes', corsCheckout, checkoutLimiter, async (req, res) => {
+  try {
+    const { nombre, telefono, email, placa, marca, modelo, anio, zona, fecha_preferida, servicio } = req.body;
+
+    if (!nombre?.trim())    throw new AppError('Nombre requerido', 400);
+    if (!zona?.trim())      throw new AppError('Zona requerida', 400);
+    if (!servicio || !PLANES[servicio]) throw new AppError('Servicio inválido', 400);
+
+    // Normalizar y validar teléfono (strip non-digits)
+    const telefonoLimpio = (telefono || '').replace(/\D/g, '');
+    if (telefonoLimpio.length < 8) throw new AppError('Teléfono inválido', 400);
+
+    if (!email?.trim() || !email.includes('@')) throw new AppError('Email inválido', 400);
+
+    const placaFinal = placa?.trim().toUpperCase();
+    if (!placaFinal) throw new AppError('Placa requerida', 400);
+    validatePlaca(placaFinal);
+
+    // Buscar o crear cliente por teléfono
+    let cliente = await db.obtenerClientePorNumero(telefonoLimpio);
+    if (!cliente) {
+      cliente = await db.crearCliente(telefonoLimpio, { nombre: nombre.trim(), tipo: 'CLIENTE' });
+    }
+
+    // Si ya existe una orden PENDIENTE_PAGO para esta placa, reutilizarla
+    const ordenExistente = await db.obtenerOrdenPorPlaca(placaFinal);
+    if (ordenExistente) {
+      if (ordenExistente.status === 'PENDIENTE_PAGO') {
+        return res.status(200).json({ orden_id: ordenExistente.id, placa: placaFinal });
+      }
+      throw new AppError('Ya existe una inspección activa para esta placa', 409);
+    }
+
+    const orden = await db.crearOrdenWeb({
+      placa: placaFinal,
+      cliente_id: cliente.id,
+      servicio,
+      nombre_cliente: nombre.trim(),
+      email: email.trim(),
+      zona: zona.trim(),
+      fecha_preferida: fecha_preferida || null,
+      marca: marca?.trim() || null,
+      modelo: modelo?.trim() || null,
+      anio: anio || null,
+    });
+
+    logger.success('Web order created', { placa: placaFinal, servicio });
+    res.status(201).json({ orden_id: orden.id, placa: placaFinal });
+  } catch (error) {
+    METRICS.totalErrors++;
+    logger.error('Web order error', { error: error.message });
+    handleError(error, res);
+  }
+});
+
+// POST /api/pagos/crear-checkout — crea sesión en Recurrente y devuelve checkout_url
+app.options('/api/pagos/crear-checkout', corsCheckout);
+app.post('/api/pagos/crear-checkout', corsCheckout, checkoutLimiter, async (req, res) => {
+  try {
+    const { orden_id } = req.body;
+    if (!orden_id) throw new AppError('orden_id requerido', 400);
+
+    const orden = await db.obtenerOrdenPorId(orden_id);
+    if (!orden) throw new AppError('Orden no encontrada', 404);
+    if (!['PENDIENTE_PAGO', 'INICIADA'].includes(orden.status)) {
+      throw new AppError('Esta orden ya fue procesada', 409);
+    }
+
+    if (!CONFIG.RECURRENTE_SECRET_KEY) {
+      throw new AppError('Procesador de pago no configurado', 503);
+    }
+
+    const plan = PLANES[orden.servicio];
+    if (!plan) throw new AppError('Servicio de orden inválido', 400);
+
+    const respuesta = await axios.post(
+      'https://app.recurrente.com/api/checkouts',
+      {
+        items: [{ name: plan.label, amount_in_cents: plan.centavos, currency: 'GTQ', quantity: 1 }],
+        success_url: `${CONFIG.WEB_URL}?paid=1&orden=${orden.id}`,
+        cancel_url:  `${CONFIG.WEB_URL}/#servicios`,
+        metadata:    { orden_id: orden.id, placa: orden.placa, servicio: orden.servicio },
+      },
+      {
+        headers: { 'X-SECRET-KEY': CONFIG.RECURRENTE_SECRET_KEY, 'Content-Type': 'application/json' },
+        timeout: 10000,
+      }
+    );
+
+    const { checkout_url, id: checkoutId } = respuesta.data;
+    if (checkoutId) await db.guardarCheckoutIdOrden(orden.id, checkoutId);
+
+    logger.success('Recurrente checkout created', { orden_id: orden.id, servicio: orden.servicio });
+    res.json({ checkout_url });
+  } catch (error) {
+    METRICS.totalErrors++;
+    logger.error('Checkout creation error', { error: error.response?.data || error.message });
+    handleError(error instanceof AppError ? error : new AppError('Error al crear el pago', 502), res);
+  }
+});
+
+// POST /webhook/recurrente — confirma pago y dispara notificaciones Telegram
+app.post('/webhook/recurrente', async (req, res) => {
+  const firmaValida = verificarFirmaRecurrente(
+    req.rawBody,
+    req.headers,
+    CONFIG.RECURRENTE_WEBHOOK_SECRET
+  );
+  if (!firmaValida) {
+    METRICS.totalErrors++;
+    logger.error('Recurrente webhook: firma inválida', { ip: req.ip });
+    return res.status(401).json({ error: 'Firma inválida' });
+  }
+
+  // Responder 200 de inmediato (ack-then-process)
+  res.status(200).json({ ok: true });
+
+  const { event_type, checkout, metadata } = req.body;
+  if (event_type !== 'intent.succeeded') return;
+
+  const checkoutId = checkout?.id;
+  const ordenIdMeta = metadata?.orden_id;
+
+  try {
+    // Buscar orden por checkout_id (principal) o por metadata.orden_id (fallback)
+    let orden = checkoutId ? await db.obtenerOrdenPorCheckoutId(checkoutId) : null;
+    if (!orden && ordenIdMeta) orden = await db.obtenerOrdenPorId(ordenIdMeta);
+    if (!orden) {
+      logger.warn('Recurrente webhook: sin orden asociada', { checkoutId, ordenIdMeta });
+      return;
+    }
+
+    // Idempotencia: si ya está PAGADA, ignorar
+    if (orden.status === 'PAGADA') {
+      logger.info('Recurrente webhook idempotente — orden ya pagada', { placa: orden.placa });
+      return;
+    }
+
+    await db.actualizarStatusOrden(orden.placa, 'PAGADA');
+    await db.crearNotificacion(orden.placa, 'PAGO_CONFIRMADO', `Pago confirmado vía web (checkout ${checkoutId || 'N/D'})`);
+    logger.success('Payment confirmed via web', { placa: orden.placa, servicio: orden.servicio });
+
+    const cliente = await db.obtenerClientePorId(orden.cliente_id);
+    await notificarEquipo(orden, cliente);
+  } catch (error) {
+    METRICS.totalErrors++;
+    logger.error('Recurrente webhook processing error', { error: error.message });
+  }
+});
+
+// Helper: mensajes Telegram determinísticos (sin tocar prompts.js)
+function mensajeMecanico(orden, cliente) {
+  const icono  = orden.servicio === 'SCANNER' ? '🔍' : '🚗';
+  const tarea  = {
+    SCANNER:  'Solo escaneo OBD-II.',
+    ESTANDAR: 'Inspección técnica completa — 110 puntos.',
+    FULL:     'Inspección 110 puntos + verificación legal.\nEl tramitador también fue notificado.',
+  }[orden.servicio] || '';
+  const fecha  = orden.fecha_preferida
+    ? new Date(orden.fecha_preferida).toLocaleDateString('es-GT')
+    : 'Por confirmar';
+  const tel = cliente?.numero_telefono ? `+${cliente.numero_telefono}` : 'N/D';
+
+  return `${icono} <b>NUEVA ORDEN · ${orden.servicio}</b>
+
+<b>Placa:</b> <code>${orden.placa}</code>
+<b>Cliente:</b> ${orden.nombre_cliente || 'N/D'}
+<b>Tel:</b> ${tel}
+<b>Zona:</b> ${orden.zona || 'N/D'}
+<b>Fecha preferida:</b> ${fecha}
+
+${tarea}
+<i>Registra la placa en el bot para iniciar.</i>`;
+}
+
+function mensajeTramitador(orden, cliente) {
+  const tel = cliente?.numero_telefono ? `+${cliente.numero_telefono}` : 'N/D';
+  return `📋 <b>NUEVA ORDEN · FULL (TRÁMITE)</b>
+
+<b>Placa:</b> <code>${orden.placa}</code>
+<b>Cliente:</b> ${orden.nombre_cliente || 'N/D'}
+<b>Tel:</b> ${tel}
+
+Verificaciones: impuesto circulación, calcomanía, multas, gravámenes.
+<i>Registra la placa en tu bot cuando el mecánico confirme la inspección.</i>`;
+}
+
+async function notificarEquipo(orden, cliente) {
+  const promesas = [
+    enviarMensajeTelegram(
+      CONFIG.TELEGRAM_MECANICO_BOT_TOKEN,
+      CONFIG.TELEGRAM_MECANICO_CHAT_ID,
+      mensajeMecanico(orden, cliente)
+    ),
+  ];
+
+  if (orden.servicio === 'FULL' && CONFIG.TELEGRAM_TRAMITADOR_CHAT_ID) {
+    promesas.push(
+      enviarMensajeTelegram(
+        CONFIG.TELEGRAM_TRAMITADOR_BOT_TOKEN,
+        CONFIG.TELEGRAM_TRAMITADOR_CHAT_ID,
+        mensajeTramitador(orden, cliente)
+      )
+    );
+  }
+
+  const resultados = await Promise.allSettled(promesas);
+  resultados.forEach((r, i) => {
+    if (r.status === 'rejected') {
+      logger.error(`Telegram notification failed (index ${i})`, { error: r.reason?.message });
+    }
+  });
+}
+
+// ── FIN CHECKOUT WEB ──────────────────────────────────────────────────────────
 
 app.use((req, res) => {
   handleError(new AppError('Ruta no encontrada', 404), res);

@@ -349,6 +349,66 @@ export async function obtenerStatsReporte() {
   };
 }
 
+// ── WEB CHECKOUT ─────────────────────────────────────────────────────────────
+
+export async function crearOrdenWeb(data) {
+  const id = uuidv4();
+  const {
+    placa, cliente_id, servicio,
+    nombre_cliente, email, zona, fecha_preferida,
+    marca, modelo, anio,
+  } = data;
+
+  const { data: result, error } = await supabase
+    .from('ordenes')
+    .insert([{
+      id, placa, cliente_id,
+      tipo_auto: 'RODADO',
+      status: 'PENDIENTE_PAGO',
+      canal_origen: 'web',
+      servicio,
+      nombre_cliente: nombre_cliente || null,
+      email: email || null,
+      zona: zona || null,
+      fecha_preferida: fecha_preferida || null,
+      marca: marca || null,
+      modelo: modelo || null,
+      anio: anio ? parseInt(anio, 10) : null,
+    }])
+    .select();
+
+  if (error) throw new Error(`Error creating web order: ${error.message}`);
+  return result[0];
+}
+
+export async function obtenerOrdenPorId(id) {
+  const { data, error } = await supabase
+    .from('ordenes')
+    .select('*')
+    .eq('id', id)
+    .single();
+  if (error && error.code !== 'PGRST116') throw error;
+  return data;
+}
+
+export async function guardarCheckoutIdOrden(ordenId, checkoutId) {
+  const { error } = await supabase
+    .from('ordenes')
+    .update({ recurrente_checkout_id: checkoutId, updated_at: new Date().toISOString() })
+    .eq('id', ordenId);
+  if (error) throw new Error(`Error saving checkout ID: ${error.message}`);
+}
+
+export async function obtenerOrdenPorCheckoutId(checkoutId) {
+  const { data, error } = await supabase
+    .from('ordenes')
+    .select('*')
+    .eq('recurrente_checkout_id', checkoutId)
+    .single();
+  if (error && error.code !== 'PGRST116') throw error;
+  return data;
+}
+
 export async function encolarJob(proveedor, externalId, payload) {
   const id = uuidv4();
   const { data: result, error } = await supabase
@@ -428,4 +488,8 @@ export default {
   reclamarJobsPendientes,
   marcarJobCompletado,
   marcarJobFallido,
+  crearOrdenWeb,
+  obtenerOrdenPorId,
+  guardarCheckoutIdOrden,
+  obtenerOrdenPorCheckoutId,
 };

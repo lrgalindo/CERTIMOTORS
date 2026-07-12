@@ -1,6 +1,47 @@
 import crypto from 'node:crypto';
 import { logger } from './logger.js';
 
+// Recurrente usa Svix para delivery de webhooks.
+// Firmado como: "${svix-id}.${svix-timestamp}.${raw_body}"
+// Secreto en formato "whsec_<base64>" — se decodifica el sufijo.
+export function verificarFirmaRecurrente(rawBody, headers, signingSecret) {
+  if (!signingSecret) {
+    logger.warn('RECURRENTE_WEBHOOK_SECRET no configurado — webhook rechazado');
+    return false;
+  }
+
+  const svixId        = headers['svix-id'];
+  const svixTimestamp = headers['svix-timestamp'];
+  const svixSignature = headers['svix-signature'];
+  if (!svixId || !svixTimestamp || !svixSignature) return false;
+
+  // Prevención de replay: rechazar si el timestamp tiene más de 5 minutos
+  const ahora = Math.floor(Date.now() / 1000);
+  if (Math.abs(ahora - parseInt(svixTimestamp, 10)) > 300) {
+    logger.warn('Recurrente webhook rechazado: timestamp fuera de ventana', { svixTimestamp });
+    return false;
+  }
+
+  const secret = signingSecret.startsWith('whsec_')
+    ? Buffer.from(signingSecret.slice('whsec_'.length), 'base64')
+    : Buffer.from(signingSecret, 'base64');
+
+  const firmado = `${svixId}.${svixTimestamp}.${rawBody.toString()}`;
+  const calculada = crypto.createHmac('sha256', secret).update(firmado).digest('base64');
+
+  // svix-signature puede tener múltiples firmas separadas por espacio ("v1,xxx v1,yyy")
+  return svixSignature.split(' ').some(sig => {
+    const sigBase64 = sig.startsWith('v1,') ? sig.slice('v1,'.length) : sig;
+    try {
+      const a = Buffer.from(calculada, 'base64');
+      const b = Buffer.from(sigBase64, 'base64');
+      return a.length === b.length && crypto.timingSafeEqual(a, b);
+    } catch {
+      return false;
+    }
+  });
+}
+
 let avisoWhatsappSinSecreto = false;
 
 // Meta firma el body crudo con HMAC SHA-256 usando el App Secret y lo manda en
