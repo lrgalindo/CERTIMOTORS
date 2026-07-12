@@ -17,3 +17,12 @@
 - Los flujos que dependen del LLM (mensajes ambiguos, respuesta "tarjeta de circulación") no se pueden cubrir con tests de unidad sin mockear Claude — y mockear Claude para verificar que Claude sigue instrucciones no prueba nada real. Mejor declararlo como pendiente de prueba manual que fingir cobertura.
 - Los archivos `.env.example` pueden estar protegidos por el sistema de permisos del harness. Ante una denegación, la respuesta correcta es documentar las líneas pendientes en el PR body y no insistir.
 - El regex de patrones prohibidos debe aplicarse línea a línea con `lastIndex = 0` después de cada test cuando se usa la flag `g`; de lo contrario el estado del regex entre líneas produce falsos negativos silenciosos.
+
+## Lecciones de la sesión de staging (8-9 Jul 2026)
+
+- `REVOKE EXECUTE ... FROM anon, authenticated` no cierra nada en Postgres: las funciones dan EXECUTE a PUBLIC por default (`=X/` en proacl). Hay que revocar PUBLIC también. Lo encontró el dry-run contra el esquema real, no la lectura del SQL.
+- Supabase branching requiere plan Pro. El equivalente en Free: correr la migración completa en producción dentro de `BEGIN...ROLLBACK` (con el ROLLBACK escrito ANTES de mandar el script) y verificar el estado resultante con una temp table dentro de la misma transacción.
+- pdfkit: ✓/✗ no existen en WinAnsi y ZapfDingbats mapea esos code points a otros glifos (molinetes). Marcas de checklist → dibujarlas con vectores (2-3 strokes), nunca con texto.
+- El 97% del gasto de Claude ($6.77 de $6.95) fue UN número de spam en un día. `NUMEROS_BLOQUEADOS` lo frenó, pero la lección estructural es el tope diario de mensajes por número antes de llamar a Claude.
+- El `cache_control` en el system prompt del cliente casi no pega (cache_read promedio 158 vs creation 1,703): el historial embebido invalida el caché en cada mensaje. Partir en bloque estático cacheado + contexto dinámico aparte.
+- La verificación con subagente fresco por bloque encontró en cada bloque algo que el autor no vio (estados sin cubrir en tests, ACL de PUBLIC, comentario de migración falso sobre reconciliación de Storage). Vale el costo; con Sonnet alcanza.

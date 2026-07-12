@@ -19,10 +19,3 @@ export function validateMessage(message) {
     throw new AppError('Mensaje inválido o vacío', 400);
   }
 }
-
-export function validatePuntoActual(punto) {
-  const n = Number(punto);
-  if (!Number.isInteger(n) || n < 1 || n > 110) {
-    throw new AppError('Punto de inspección inválido (debe ser 1-110)', 400);
-  }
-}

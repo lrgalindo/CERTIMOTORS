@@ -120,18 +120,6 @@ export async function obtenerConversacionesPorCliente(clienteId, limite = 6) {
   return data || [];
 }
 
-export async function obtenerConversacionesPorPlaca(placa) {
-  const { data, error } = await supabase
-    .from('conversaciones')
-    .select('*')
-    .eq('placa', placa)
-    .order('created_at', { ascending: false })
-    .limit(10);
-
-  if (error) throw new Error(`Error fetching conversations: ${error.message}`);
-  return data || [];
-}
-
 export async function guardarConversacion(placa, cliente_id, tipo_usuario, mensaje_entrada, respuesta_ia, tokens = 0) {
   const id = uuidv4();
   const { data: result, error } = await supabase
@@ -256,22 +244,6 @@ export async function obtenerNotificacionesPorPlaca(placa) {
   return data || [];
 }
 
-export async function obtenerNotificacionesPendientes() {
-  const { data, error } = await supabase
-    .from('notificaciones')
-    .select('*')
-    .eq('enviado', false)
-    .order('created_at', { ascending: true });
-
-  if (error) throw new Error(`Error fetching pending notifications: ${error.message}`);
-  return data || [];
-}
-
-export async function marcarNotificacionEnviada(id) {
-  const { error } = await supabase.from('notificaciones').update({ enviado: true }).eq('id', id);
-  if (error) throw new Error(`Error marking notification as sent: ${error.message}`);
-}
-
 export async function registrarCostoAPI({ rol, modelo, tipoTarea, tokensInput, tokensOutput, tokensCacheCreation = 0, tokensCacheRead = 0, costoUsd, placa = null }) {
   const id = uuidv4();
   const { data: result, error } = await supabase
@@ -383,6 +355,92 @@ export async function obtenerStatsReporte() {
   };
 }
 
+// ─── Estado de conversación (máquina de estados WhatsApp) ────────────────────
+// JSONB en clientes: las etapas 0-3 ocurren antes de que exista una orden.
+// Requiere la migración 009.
+
+export async function actualizarEstadoConversacion(clienteId, estado) {
+  const { error } = await supabase
+    .from('clientes')
+    .update({ estado_conversacion: estado, updated_at: new Date().toISOString() })
+    .eq('id', clienteId);
+  if (error) throw new Error(`Error actualizando estado de conversación: ${error.message}`);
+}
+
+// ─── Fotos de inspección (bucket privado, separado de certificados) ──────────
+// Requiere la migración 008 (tabla fotos_inspeccion). El bucket es privado:
+// las fotos solo se leen desde el backend (service key) al generar el PDF.
+
+export async function asegurarBucketFotos() {
+  const { data: buckets, error } = await supabase.storage.listBuckets();
+  if (error) throw new Error(`Error listando buckets de Storage: ${error.message}`);
+  if ((buckets || []).some((b) => b.name === 'fotos-inspeccion')) return;
+  const { error: createError } = await supabase.storage.createBucket('fotos-inspeccion', { public: false });
+  if (createError) throw new Error(`Error creando bucket fotos-inspeccion: ${createError.message}`);
+}
+
+export async function subirFotoInspeccion(placa, buffer, contentType = 'image/jpeg') {
+  const extension = contentType.split('/')[1] || 'jpg';
+  const ruta = `${placa}/${uuidv4()}.${extension}`;
+  const { error } = await supabase.storage.from('fotos-inspeccion').upload(ruta, buffer, { contentType });
+  if (error) throw new Error(`Error subiendo foto de inspección: ${error.message}`);
+  return ruta;
+}
+
+export async function guardarFotoInspeccion({ placa, punto = null, caption = null, storagePath }) {
+  const { error } = await supabase
+    .from('fotos_inspeccion')
+    .insert([{ id: uuidv4(), placa, punto, caption, storage_path: storagePath }]);
+  if (error) throw new Error(`Error guardando foto de inspección: ${error.message}`);
+}
+
+export async function obtenerFotosPorPlaca(placa) {
+  const { data, error } = await supabase
+    .from('fotos_inspeccion')
+    .select('*')
+    .eq('placa', placa)
+    .order('created_at', { ascending: true });
+  if (error) throw new Error(`Error obteniendo fotos de inspección: ${error.message}`);
+  return data || [];
+}
+
+export async function descargarFoto(storagePath) {
+  const { data, error } = await supabase.storage.from('fotos-inspeccion').download(storagePath);
+  if (error) throw new Error(`Error descargando foto de inspección: ${error.message}`);
+  return Buffer.from(await data.arrayBuffer());
+}
+
+// ─── Listados de solo lectura para el backoffice ─────────────────────────────
+
+export async function listarOrdenes({ status = null, placa = null, limite = 50 } = {}) {
+  let query = supabase.from('ordenes').select('*').order('created_at', { ascending: false }).limit(limite);
+  if (status) query = query.eq('status', status);
+  if (placa) query = query.eq('placa', placa);
+  const { data, error } = await query;
+  if (error) throw new Error(`Error listando órdenes: ${error.message}`);
+  return data || [];
+}
+
+export async function listarJobs(limite = 50) {
+  const { data, error } = await supabase
+    .from('cola_jobs')
+    .select('id, proveedor, status, intentos, max_intentos, error, created_at, updated_at')
+    .order('created_at', { ascending: false })
+    .limit(limite);
+  if (error) throw new Error(`Error listando jobs: ${error.message}`);
+  return data || [];
+}
+
+export async function listarClientes(limite = 50) {
+  const { data, error } = await supabase
+    .from('clientes')
+    .select('numero_telefono, nombre, created_at')
+    .order('created_at', { ascending: false })
+    .limit(limite);
+  if (error) throw new Error(`Error listando clientes: ${error.message}`);
+  return data || [];
+}
+
 export async function encolarJob(proveedor, externalId, payload) {
   const id = uuidv4();
   const { data: result, error } = await supabase
@@ -455,7 +513,6 @@ export default {
   guardarCertificado,
   obtenerUltimaOrdenPorCliente,
   obtenerConversacionesPorCliente,
-  obtenerConversacionesPorPlaca,
   guardarConversacion,
   guardarRevision,
   obtenerRevisionesPorPlaca,
@@ -465,8 +522,6 @@ export default {
   obtenerNotificacionesPorPlacaYTipos,
   asegurarBucketCertificados,
   subirCertificado,
-  obtenerNotificacionesPendientes,
-  marcarNotificacionEnviada,
   registrarCostoAPI,
   obtenerGastoDesde,
   obtenerEstadisticas,
@@ -474,6 +529,15 @@ export default {
   obtenerPlacaPorToken,
   marcarTokenUsado,
   obtenerStatsReporte,
+  actualizarEstadoConversacion,
+  asegurarBucketFotos,
+  subirFotoInspeccion,
+  guardarFotoInspeccion,
+  obtenerFotosPorPlaca,
+  descargarFoto,
+  listarOrdenes,
+  listarJobs,
+  listarClientes,
   encolarJob,
   reclamarJobsPendientes,
   marcarJobCompletado,

@@ -15,6 +15,7 @@ import { registrarWebhookTelegram } from './telegram-client.js';
 import { verificarFirmaWhatsapp, verificarSecretoTelegram, verificarFirmaRecurrente } from './webhook-security.js';
 import { procesarPagoRecurrente } from './processors.js';
 import { validarOrden } from './validar-orden.js';
+import { crearBackofficeRouter } from './backoffice.js';
 
 // Sin timeout, un socket colgado (Meta/Telegram/Recurrente) deja la promesa sin
 // resolver para siempre y el job muere en `procesando` con error null (incidente
@@ -279,6 +280,8 @@ app.post('/api/reporte-diario', async (req, res) => {
     handleError(error, res);
   }
 });
+
+app.use('/backoffice', crearBackofficeRouter(db));
 
 app.use((req, res) => {
   handleError(new AppError('Ruta no encontrada', 404), res);

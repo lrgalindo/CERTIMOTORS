@@ -8,6 +8,7 @@ import { TOOL_REGISTRAR_INSPECCION, TOOL_REGISTRAR_AVANCE_TRAMITE } from './tool
 import { validarOrden } from './validar-orden.js';
 import { generarCertificado } from './pdf-generator.js';
 import { notificarAprobacionAdmin, ADMIN_CHAT_ID } from './pdf-approval.js';
+import { estadoInicial, actualizarEstado, extraerDatos, contextoParaPrompt } from './estado-conversacion.js';
 
 export const SERVICIOS = {
   BASICO: { etiqueta: 'BÁSICO', precio: 'Q550', cents: 55000 },
@@ -50,6 +51,40 @@ export function esComandoBot(message) {
   return Boolean(message?.entities?.some((e) => e.type === 'bot_command' && e.offset === 0));
 }
 
+// Persiste la foto del mecánico para el registro fotográfico del PDF v2.
+// Best-effort: si la migración 008 no está aplicada o Storage falla, se loggea
+// y la inspección sigue — la foto ya viajó a Claude para el análisis igual.
+// `contentUser` es el array de bloques de construirContentConImagen.
+async function guardarFotoInspeccionSegura(db, placa, contentUser, hallazgos, texto) {
+  try {
+    const bloqueImagen = Array.isArray(contentUser) && contentUser.find((b) => b.type === 'image');
+    if (!bloqueImagen) return;
+
+    // Solo hallazgos válidos (mismo criterio que guardarRevision): un punto
+    // fuera de rango de Claude no debe terminar como referencia de la foto.
+    const validos = hallazgos.filter(
+      (h) => Number.isInteger(h.punto) && h.punto >= 1 && h.punto <= 110 && ESTADOS_HALLAZGO.includes(h.estado)
+    );
+    const relevante = validos.find((h) => h.estado === 'MAL') || validos.find((h) => h.estado === 'REGULAR') || validos[0];
+    const caption = relevante?.nombre_punto || (texto || '').slice(0, 60) || 'Hallazgo';
+
+    await db.asegurarBucketFotos();
+    const buffer = Buffer.from(bloqueImagen.source.data, 'base64');
+    const ruta = await db.subirFotoInspeccion(placa, buffer, bloqueImagen.source.media_type);
+    await db.guardarFotoInspeccion({ placa, punto: relevante?.punto ?? null, caption, storagePath: ruta });
+    logger.success('Foto de inspección guardada', { placa, caption });
+  } catch (error) {
+    logger.warn('No se pudo guardar la foto de inspección (¿migración 008 pendiente?)', { placa, error: error.message });
+  }
+}
+
+// Último mensaje que el bot le mandó a cada mecánico. Sin esto, cada mensaje
+// es un turno aislado y una respuesta como "No" a la pregunta de confirmación
+// de cierre no tiene referente (incidente 9 Jul 2026: el bot la trató como
+// hallazgo ambiguo). ponytail: en memoria — un solo worker; si el proceso
+// reinicia a mitad de conversación, degrada al comportamiento anterior.
+const ultimaRespuestaBotMecanico = new Map();
+
 async function resolverPlacaActivaMecanico(db, mecanicoId) {
   const ultimaPlaca = await db.obtenerUltimaPlacaPorMecanico(mecanicoId);
   if (!ultimaPlaca) return null;
@@ -81,12 +116,13 @@ async function construirContentConImagen(texto, mediaId, canal, botToken) {
       });
       bloques.push({ type: 'image', source: { type: 'base64', media_type: contentType, data: base64 } });
     } else if (canal === 'telegram') {
-      const fileResp = await axios.get(`https://api.telegram.org/bot${botToken}/getFile`, {
+      const tgBase = process.env.TELEGRAM_API_URL || 'https://api.telegram.org';
+      const fileResp = await axios.get(`${tgBase}/bot${botToken}/getFile`, {
         params: { file_id: mediaId },
       });
       const filePath = fileResp.data.result.file_path;
       const { base64, contentType } = await descargarImagenBase64(
-        `https://api.telegram.org/file/bot${botToken}/${filePath}`
+        `${tgBase}/file/bot${botToken}/${filePath}`
       );
       bloques.push({ type: 'image', source: { type: 'base64', media_type: contentType, data: base64 } });
     }
@@ -218,7 +254,18 @@ async function confirmarServicio(db, placa, servicio) {
   return crearCheckoutRecurrente(placa, servicio);
 }
 
+// Persistencia best-effort del estado: si la migración 009 no está aplicada,
+// se loggea y la conversación sigue (el estado simplemente no persiste).
+async function guardarEstadoSeguro(db, clienteId, estado) {
+  try {
+    await db.actualizarEstadoConversacion(clienteId, estado);
+  } catch (error) {
+    logger.warn('No se pudo persistir estado_conversacion (¿migración 009 pendiente?)', { clienteId, error: error.message });
+  }
+}
+
 export async function procesarWhatsapp(db, payload, apiKey) {
+  const t0 = Date.now();
   const messages = payload?.entry?.[0]?.changes?.[0]?.value?.messages || [];
   if (messages.length === 0) return;
 
@@ -258,6 +305,13 @@ export async function procesarWhatsapp(db, payload, apiKey) {
       const orden = await db.obtenerUltimaOrdenPorCliente(cliente.id);
       if (orden) {
         const svc = SERVICIOS[servicioBoton];
+        // Tocar un botón es elección explícita: monto confirmado por definición.
+        const estadoBoton = actualizarEstado(cliente.estado_conversacion || estadoInicial(), {
+          plan_elegido: servicioBoton,
+          monto_confirmado: true,
+          placa: orden.placa,
+        });
+        await guardarEstadoSeguro(db, cliente.id, estadoBoton);
         const url = await confirmarServicio(db, orden.placa, servicioBoton);
         const respuesta =
           `Perfecto, ${svc.etiqueta} (${svc.precio}) para tu ${orden.placa}. Podés pagar aquí: ${url}\n\n` +
@@ -323,7 +377,14 @@ export async function procesarWhatsapp(db, payload, apiKey) {
     .map((c) => `Cliente: ${c.mensaje_entrada}\nAsesor: ${c.respuesta_ia}`)
     .join('\n');
 
-  const systemPrompt = prompts.construirSystemPromptCliente(placa, orden, cliente, historialTexto, { ordenAjena });
+  // Estado explícito de la conversación: el código decide etapa y faltantes;
+  // el agente solo recibe el contexto y conversa.
+  const estadoPrevio = actualizarEstado(cliente.estado_conversacion || estadoInicial(), placa ? { placa } : {});
+
+  const systemPrompt = prompts.construirSystemPromptCliente(placa, orden, cliente, historialTexto, {
+    ordenAjena,
+    contextoEstado: contextoParaPrompt(estadoPrevio),
+  });
   const respuestaCruda = await llamarClaudeAPI(
     apiKey,
     db,
@@ -333,12 +394,22 @@ export async function procesarWhatsapp(db, payload, apiKey) {
     placa
   );
 
-  const { texto: respuestaLimpia, servicio: servicioElegido, escalar } = extraerMarcadores(respuestaCruda);
+  const { texto: sinMarcadores, servicio: servicioElegido, escalar } = extraerMarcadores(respuestaCruda);
+  const { texto: respuestaLimpia, datos } = extraerDatos(sinMarcadores);
   let respuestaFinal = respuestaLimpia;
 
-  // Elección (o cambio) de servicio detectada por el agente, solo antes del pago.
+  // [SERVICIO:X] es la elección explícita del cliente: fija plan y monto.
+  if (servicioElegido) {
+    datos.plan_elegido = servicioElegido;
+    datos.monto_confirmado = true;
+  }
+  const estado = actualizarEstado(estadoPrevio, datos);
+  await guardarEstadoSeguro(db, cliente.id, estado);
+
+  // Elección (o cambio) de servicio, solo antes del pago. El link de pago solo
+  // existe con monto_confirmado — la elección explícita es lo que lo confirma.
   const puedeElegir = orden && ['INICIADA', 'SERVICIO_PRESENTADO', 'ESPERANDO_PAGO'].includes(orden.status);
-  if (servicioElegido && puedeElegir) {
+  if (servicioElegido && puedeElegir && estado.campos.monto_confirmado) {
     const url = await confirmarServicio(db, orden.placa, servicioElegido);
     respuestaFinal = `${respuestaLimpia}\n\nPodés pagar aquí: ${url}`;
     logger.success('Servicio elegido por texto', { placa: orden.placa, servicio: servicioElegido });
@@ -357,6 +428,8 @@ export async function procesarWhatsapp(db, payload, apiKey) {
     orden && !servicioElegido && ['INICIADA', 'SERVICIO_PRESENTADO'].includes(orden.status);
   await enviarWhatsapp(numeroCliente, mostrarBotones ? mensajeBotonesServicio(respuestaFinal) : mensajeTexto(respuestaFinal));
   logger.success('Respuesta enviada al cliente por WhatsApp', { numeroCliente });
+  // Observabilidad de latencia por etapa (solo medición, sin optimizar nada).
+  logger.info('Latencia WhatsApp', { ms: Date.now() - t0, etapa: estado.etapa });
 }
 
 // Webhook de pago de Recurrente. Recurrente reintenta si respondemos non-2xx,
@@ -378,6 +451,14 @@ export async function procesarPagoRecurrente(db, payload) {
   const orden = await db.obtenerOrdenPorPlaca(placa);
   if (!orden) {
     logger.error('Pago recibido para orden inexistente', { placa });
+    return { procesado: false };
+  }
+
+  // Idempotencia: Recurrente/Svix reintenta y puede replayar dentro de la
+  // ventana anti-replay. Si la orden ya avanzó más allá del pago, no repetir
+  // el cambio de estado ni los avisos al cliente y al admin.
+  if (!['INICIADA', 'SERVICIO_PRESENTADO', 'ESPERANDO_PAGO'].includes(orden.status)) {
+    logger.info('Webhook Recurrente ignorado (pago ya procesado)', { placa, status: orden.status });
     return { procesado: false };
   }
 
@@ -462,7 +543,13 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
     contentUser = texto;
   }
 
-  const systemPrompt = prompts.construirSystemPromptMecanico(placa, orden.tipo_auto, puntosCompletados, ultimosHallazgos);
+  const systemPrompt = prompts.construirSystemPromptMecanico(
+    placa,
+    orden.tipo_auto,
+    puntosCompletados,
+    ultimosHallazgos,
+    ultimaRespuestaBotMecanico.get(telegram_id) || null
+  );
   const {
     hallazgos = [],
     inspeccion_completa: inspeccionCompleta = false,
@@ -489,6 +576,10 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
     }
     const detalle = [hallazgo.estado, hallazgo.nombre_punto, hallazgo.observacion].filter(Boolean).join(' - ');
     await db.guardarRevision(placa, telegram_id, hallazgo.punto, detalle);
+  }
+
+  if (hasPhoto) {
+    await guardarFotoInspeccionSegura(db, placa, contentUser, hallazgos, texto);
   }
 
   if (inspeccionCompleta) {
@@ -519,6 +610,10 @@ export async function procesarTelegramMecanico(db, payload, botToken, apiKey) {
     }
   }
 
+  // Al cerrar una inspección, el contexto de esa conversación ya no aplica a
+  // la siguiente placa — se descarta en vez de arrastrarlo.
+  if (inspeccionCompleta) ultimaRespuestaBotMecanico.delete(telegram_id);
+  else ultimaRespuestaBotMecanico.set(telegram_id, respuesta);
   await enviarMensajeTelegram(botToken, chatId, respuesta);
   logger.success('Mechanic response sent', { placa, hallazgos: hallazgos.length, inspeccionCompleta });
 }

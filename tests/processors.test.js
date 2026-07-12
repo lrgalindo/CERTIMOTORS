@@ -80,7 +80,6 @@ function crearDbFake(overrides = {}) {
       clientes[numero] = cliente;
       return cliente;
     },
-    obtenerConversacionesPorPlaca: async (placa) => conversaciones.filter((c) => c.placa === placa),
     obtenerUltimaOrdenPorCliente: async (clienteId) => {
       const propias = Object.values(ordenes).filter((o) => o.cliente_id === clienteId);
       return propias[propias.length - 1] || null;
@@ -556,6 +555,34 @@ test('procesarTelegramMecanico: no re-avisa al cliente si la orden ya estaba INS
   delete process.env.WHATSAPP_GRAPH_API_URL;
 });
 
+test('procesarPagoRecurrente: orden en ESPERANDO_PAGO (camino normal) sí procesa el pago', async () => {
+  const { procesarPagoRecurrente } = await import('../src/processors.js');
+  const db = crearDbFake();
+  db._ordenes.P926FTB.status = 'ESPERANDO_PAGO';
+
+  const resultado = await procesarPagoRecurrente(db, {
+    event_type: 'payment_intent.succeeded',
+    checkout: { metadata: { placa: 'P926FTB', servicio: 'BASICO' } },
+  });
+
+  assert.equal(resultado.procesado, true);
+  assert.equal(db._ordenes.P926FTB.status, 'PAGO_CONFIRMADO');
+});
+
+test('procesarPagoRecurrente: replay del webhook no repite avisos si el pago ya se procesó', async () => {
+  const { procesarPagoRecurrente } = await import('../src/processors.js');
+  const db = crearDbFake();
+  db._ordenes.P926FTB.status = 'PAGO_CONFIRMADO';
+
+  const resultado = await procesarPagoRecurrente(db, {
+    event_type: 'payment_intent.succeeded',
+    checkout: { metadata: { placa: 'P926FTB', servicio: 'FULL' } },
+  });
+
+  assert.equal(resultado.procesado, false);
+  assert.ok(!db._notificaciones.some((n) => n.tipo === 'PAGO_CONFIRMADO'));
+});
+
 test('procesarPagoRecurrente: ignora eventos que no son pago exitoso', async () => {
   const { procesarPagoRecurrente } = await import('../src/processors.js');
   const db = crearDbFake();
@@ -567,6 +594,128 @@ test('procesarPagoRecurrente: ignora eventos que no son pago exitoso', async () 
 
   assert.equal(resultado.procesado, false);
   assert.equal(db._ordenes.P926FTB.status, 'INICIADA');
+});
+
+// ─── Máquina de estado de conversación (WhatsApp) ─────────────────────────────
+
+test('procesarWhatsapp: los [DATO:] del agente actualizan estado_conversacion y avanzan la etapa', async () => {
+  const estadosGuardados = [];
+  const { server, url } = await crearServidorClaudeFake((body) => {
+    if (body.messaging_product) return { ok: true };
+    return textResponse('Anotado — Corolla 2019 en Mixco. [DATO:marca=Toyota] [DATO:modelo=Corolla] [DATO:anio=2019] [DATO:zona=Mixco] [DATO:es_dueno=si]');
+  });
+  process.env.ANTHROPIC_API_URL = url;
+  process.env.WHATSAPP_GRAPH_API_URL = url;
+
+  try {
+    const db = crearDbFake({
+      actualizarEstadoConversacion: async (clienteId, estado) => estadosGuardados.push(estado),
+    });
+    // Cliente con estado previo: plan y contacto ya completos, en etapa vehículo/zona.
+    db._clientes['50266666666'] = {
+      id: 'cliente-e2e',
+      numero_telefono: '50266666666',
+      estado_conversacion: {
+        etapa: '3_vehiculo_zona',
+        persona_activa: 'sales',
+        campos: {
+          plan_elegido: 'BASICO', nombre: 'Ana', telefono_confirmado: '50266666666',
+          placa: null, marca: null, modelo: null, anio: null, zona: null, es_dueno: null,
+          fecha_tentativa: null, hora_tentativa: null,
+          upsell_segunda_inspeccion: false, monto_confirmado: false,
+        },
+      },
+    };
+    await procesarWhatsapp(db, mensajeWhatsapp('es un toyota corolla 2019, está en mixco y es mío, placa P555BBB', { from: '50266666666' }), 'fake-key');
+
+    assert.equal(estadosGuardados.length, 1);
+    const estado = estadosGuardados[0];
+    assert.equal(estado.campos.marca, 'Toyota');
+    assert.equal(estado.campos.anio, 2019);
+    assert.equal(estado.campos.zona, 'MIXCO');
+    assert.equal(estado.campos.es_dueno, true);
+    assert.equal(estado.campos.placa, 'P555BBB');
+    assert.equal(estado.etapa, '4_agendamiento', 'con vehículo/zona completos la etapa avanza');
+  } finally {
+    server.close();
+    delete process.env.ANTHROPIC_API_URL;
+    delete process.env.WHATSAPP_GRAPH_API_URL;
+  }
+});
+
+test('procesarWhatsapp: sin monto_confirmado no se crea link de pago; [SERVICIO:X] lo confirma', async () => {
+  const enviados = [];
+  let respuestaClaude = 'El BÁSICO cubre 110 puntos a Q550. ¿Te lo confirmo?'; // sin marcador: solo informa
+  const { server, url } = await crearServidorClaudeFake((body) => {
+    if (body.messaging_product) {
+      enviados.push(body);
+      return { ok: true };
+    }
+    return textResponse(respuestaClaude);
+  });
+  process.env.ANTHROPIC_API_URL = url;
+  process.env.WHATSAPP_GRAPH_API_URL = url;
+
+  try {
+    const db = crearDbFake({ actualizarEstadoConversacion: async () => {} });
+    // El número pertenece al dueño de P926FTB (cliente-1) para que la orden sea propia.
+    db._clientes['50212345678'] = { id: 'cliente-1', numero_telefono: '50212345678' };
+    // Turno 1: pregunta de precio — el agente NO emite [SERVICIO:X].
+    await procesarWhatsapp(db, mensajeWhatsapp('cuánto cuesta el básico para mi P926FTB?', { from: '50212345678' }), 'fake-key');
+    const cuerpo1 = enviados[0].interactive?.body?.text || enviados[0].text?.body;
+    assert.ok(!cuerpo1.includes('Podés pagar aquí'), 'sin elección explícita no hay link de pago');
+    assert.equal(db._ordenes.P926FTB.status, 'INICIADA');
+
+    // Turno 2: elección explícita — el agente emite el marcador.
+    respuestaClaude = 'Perfecto, BÁSICO para tu P926FTB. [SERVICIO:BASICO]';
+    await procesarWhatsapp(db, mensajeWhatsapp('sí, dale, el básico', { from: '50212345678' }), 'fake-key');
+    const cuerpo2 = enviados[1].interactive?.body?.text || enviados[1].text?.body;
+    assert.ok(cuerpo2.includes('Podés pagar aquí'), 'la elección explícita confirma el monto y genera el link');
+    assert.equal(db._ordenes.P926FTB.status, 'ESPERANDO_PAGO');
+  } finally {
+    server.close();
+    delete process.env.ANTHROPIC_API_URL;
+    delete process.env.WHATSAPP_GRAPH_API_URL;
+  }
+});
+
+// ─── Contexto del último mensaje del bot al mecánico (incidente "No", 9 Jul) ──
+
+test('procesarTelegramMecanico: el segundo turno recibe el último mensaje del bot como contexto', async () => {
+  const systemsRecibidos = [];
+  const { server, url } = await crearServidorClaudeFake((body) => {
+    if (body.messaging_product) return { ok: true };
+    systemsRecibidos.push(body.system?.[0]?.text || '');
+    return toolUseResponse('registrar_inspeccion', {
+      hallazgos: [],
+      inspeccion_completa: false,
+      respuesta_mecanico: '¿Confirmás que terminaste la inspección de P926FTB?',
+    });
+  });
+  process.env.ANTHROPIC_API_URL = url;
+
+  try {
+    // "No" no trae placa: el flujo la resuelve por la última inspección activa.
+    const db = crearDbFake({ obtenerUltimaPlacaPorMecanico: async () => 'P926FTB' });
+    // telegram_id propio para no heredar estado del Map de otros tests
+    const payload = (texto) => {
+      const p = mensajeTelegram(texto);
+      p.message.from.id = 777001;
+      return p;
+    };
+    await procesarTelegramMecanico(db, payload('placa P926FTB ninguna adicional'), undefined, 'fake-key');
+    await procesarTelegramMecanico(db, payload('No'), undefined, 'fake-key');
+
+    assert.equal(systemsRecibidos.length, 2);
+    assert.ok(systemsRecibidos[0].includes('(Ninguno — es el primer intercambio de esta sesión)'));
+    assert.ok(
+      systemsRecibidos[1].includes('¿Confirmás que terminaste la inspección de P926FTB?'),
+      'el segundo turno debe llevar la pregunta de confirmación previa como contexto'
+    );
+  } finally {
+    server.close();
+    delete process.env.ANTHROPIC_API_URL;
+  }
 });
 
 // ─── Comandos de bot (/start) — incidente jobs huérfanos jul 2026 ─────────────
