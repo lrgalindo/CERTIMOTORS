@@ -52,6 +52,24 @@ const COLOR = {
   HEADER: '#1a2b4a',
   GRIS_HEADER: '#f3f4f6',
   GRIS_TEXTO: '#6b7280',
+  GRIS_BADGE: '#4b5563',
+};
+
+// Fuente pública de cada verificación legal — línea de fuente en los bloques
+// de la página 2 (transparencia de dónde sale el dato, patrón informe v2).
+const FUENTE_AREA = {
+  IMPUESTO_CIRCULACION: 'Fuente: SAT — estado de cuenta del impuesto de circulación',
+  CALCOMANIA: 'Fuente: SAT — calcomanía electrónica de circulación',
+  MULTAS: 'Fuente: registros municipales de tránsito (Emetra/PMT)',
+  GRAVAMENES: 'Fuente: Registro de Garantías Mobiliarias',
+};
+
+// Qué significa un impedimento para el comprador, en lenguaje claro.
+const IMPACTO_AREA = {
+  IMPUESTO_CIRCULACION: 'Hay impuesto pendiente: el traspaso no procede hasta ponerse al día, y la deuda pasa con el vehículo — negociá que el vendedor la salde antes de pagar.',
+  CALCOMANIA: 'La calcomanía está vencida: el vehículo puede ser multado al circular y hay que renovarla antes o inmediatamente después del traspaso.',
+  MULTAS: 'Hay multas registradas: quedan asociadas al vehículo — pedí que el vendedor las pague antes de cerrar el trato.',
+  GRAVAMENES: 'Hay un gravamen activo: el vehículo está dado en garantía de una deuda y un tercero podría reclamarlo. No comprés sin que se libere el gravamen primero.',
 };
 
 const BG_SUAVE = { MAL: '#fee2e2', REGULAR: '#fef3c7', BIEN: '#dcfce7' };
@@ -142,6 +160,67 @@ function dibujarPiePagina(doc, placa, numero, total) {
     .text(`Orden ${placa}  ·  Página ${numero} de ${total}`, doc.page.margins.left, yLinea + 4, { width: anchoUtil, align: 'right' })
     .fillColor('#000000');
   doc.page.margins.bottom = bottomMarginOriginal;
+}
+
+// Fila de pills con lo que incluye el servicio contratado, debajo del encabezado.
+function dibujarBadgesServicio(doc, orden) {
+  const incluye = ['INSPECCIÓN 110 PUNTOS', 'CERTIFICADO CON QR'];
+  if (orden.servicio === 'FULL') incluye.push('VERIFICACIÓN LEGAL SAT/MUNI');
+
+  const y = doc.y;
+  let x = doc.page.margins.left;
+  doc.font('Helvetica-Bold').fontSize(7.5);
+  for (const texto of incluye) {
+    const width = doc.widthOfString(texto) + 14;
+    doc.save().roundedRect(x, y, width, 16, 8).fill(COLOR.GRIS_BADGE).restore();
+    doc.fillColor('#FFFFFF').text(texto, x + 7, y + 4.5);
+    x += width + 8;
+  }
+  doc.fillColor('#000000').font('Helvetica').fontSize(10);
+  doc.x = doc.page.margins.left;
+  doc.y = y + 26;
+}
+
+// Hasta 6 fotos del mecánico en grilla de 3 columnas, caption corto debajo
+// (nombre del hallazgo, no descripción). fotos: [{ buffer, caption }].
+function dibujarFotos(doc, fotos) {
+  if (!fotos.length) return;
+
+  doc.fontSize(13).font('Helvetica-Bold').fillColor('#1A1A1A').text('Registro fotográfico de la inspección');
+  doc.moveDown(0.3);
+
+  const espacio = 10;
+  const anchoUtil = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const anchoFoto = (anchoUtil - espacio * 2) / 3;
+  const altoFoto = 95;
+  const altoCelda = altoFoto + 16;
+
+  fotos.slice(0, 6).forEach((foto, i) => {
+    const col = i % 3;
+    if (col === 0) {
+      // Salto de página manual si la fila no cabe completa.
+      if (doc.y + altoCelda > doc.page.height - doc.page.margins.bottom) doc.addPage();
+      doc._filaFotosY = doc.y;
+    }
+    const x = doc.page.margins.left + col * (anchoFoto + espacio);
+    const y = doc._filaFotosY;
+    try {
+      doc.image(foto.buffer, x, y, { fit: [anchoFoto, altoFoto], align: 'center', valign: 'center' });
+    } catch {
+      doc.save().rect(x, y, anchoFoto, altoFoto).fill('#EEEEEE').restore();
+    }
+    doc
+      .font('Helvetica')
+      .fontSize(7.5)
+      .fillColor(COLOR.GRIS_TEXTO)
+      .text((foto.caption || 'Hallazgo').slice(0, 60), x, y + altoFoto + 3, { width: anchoFoto, height: 12, ellipsis: true });
+    if (col === 2 || i === Math.min(fotos.length, 6) - 1) {
+      doc.x = doc.page.margins.left;
+      doc.y = y + altoCelda + 6;
+    }
+  });
+  doc.fillColor('#000000').font('Helvetica').fontSize(10);
+  doc.moveDown(0.4);
 }
 
 function dibujarEncabezadoPrincipal(doc, { placa, codigoCertificado }) {
@@ -292,42 +371,80 @@ function dibujarTablaHallazgos(doc, { hallazgos, categoriaPorPunto, atencionPorP
 
 function dibujarPagina1(doc, datos) {
   dibujarEncabezadoPrincipal(doc, datos);
+  dibujarBadgesServicio(doc, datos.orden);
   dibujarTablaVehiculo(doc, datos);
   dibujarVeredicto(doc, datos);
   dibujarResumenBoxes(doc, datos);
   dibujarTablaHallazgos(doc, datos);
+  dibujarFotos(doc, datos.fotos || []);
+}
+
+// Bloque modular por verificación legal: badge de estado, explicación en
+// lenguaje claro, línea de fuente y callout de impacto si hay impedimento.
+function dibujarBloqueVerificacion(doc, v) {
+  const limpio = ESTADOS_LIMPIOS.includes(v.estado);
+  const noVerificado = v.estado === 'NO_VERIFICADO';
+  const badge = noVerificado
+    ? { texto: 'NO VERIFICADO', color: COLOR.GRIS_BADGE }
+    : limpio
+      ? { texto: 'OK', color: COLOR.BIEN }
+      : { texto: 'PRECAUCIÓN', color: COLOR.REGULAR };
+
+  const x = doc.page.margins.left;
+  const anchoUtil = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+
+  const explicacion = [
+    `${ESTADO_LABELS[v.estado] || v.estado}${v.detalle ? ` — ${v.detalle}` : '.'}`,
+  ].join(' ');
+  const impacto = !limpio && !noVerificado ? IMPACTO_AREA[v.area] : null;
+
+  // Altura estimada del bloque para no partirlo entre páginas.
+  doc.font('Helvetica').fontSize(9.5);
+  let alto = 26 + doc.heightOfString(explicacion, { width: anchoUtil - 24 }) + 14;
+  if (impacto) alto += doc.heightOfString(impacto, { width: anchoUtil - 40 }) + 18;
+  if (doc.y + alto > doc.page.height - doc.page.margins.bottom) doc.addPage();
+
+  const yInicio = doc.y;
+  doc.save().rect(x, yInicio, anchoUtil, alto).fillAndStroke('#FBFBFC', '#E5E7EB').restore();
+  doc.save().rect(x, yInicio, 4, alto).fill(badge.color).restore();
+
+  doc.fillColor('#1A1A1A').font('Helvetica-Bold').fontSize(11).text(AREA_LABELS[v.area], x + 12, yInicio + 8);
+  dibujarBadge(doc, x + anchoUtil - 110, yInicio + 6, badge.texto, badge.color, { fontSize: 8, paddingX: 8, paddingY: 3 });
+
+  doc.fillColor('#333333').font('Helvetica').fontSize(9.5).text(explicacion, x + 12, yInicio + 26, { width: anchoUtil - 24 });
+  doc.fillColor(COLOR.GRIS_TEXTO).fontSize(7.5).text(FUENTE_AREA[v.area] || '', x + 12, doc.y + 2, { width: anchoUtil - 24 });
+
+  if (impacto) {
+    doc
+      .fillColor('#7c2d12')
+      .font('Helvetica-Bold')
+      .fontSize(8.5)
+      .text('Qué significa esto para vos: ', x + 24, doc.y + 6, { width: anchoUtil - 40, continued: true })
+      .font('Helvetica')
+      .text(impacto);
+  }
+
+  doc.fillColor('#000000').font('Helvetica').fontSize(10);
+  doc.x = doc.page.margins.left;
+  doc.y = yInicio + alto + 10;
 }
 
 function dibujarPagina2(doc, { placa, codigoCertificado, verificaciones, veredictoAdministrativo }) {
   dibujarEncabezadoPrincipal(doc, { placa, codigoCertificado });
 
-  doc.fontSize(13).font('Helvetica-Bold').fillColor('#1A1A1A').text('Parte 2 — Verificación administrativa');
+  doc.fontSize(13).font('Helvetica-Bold').fillColor('#1A1A1A').text('Parte 2 — Verificación legal y administrativa');
   doc.moveDown(0.4);
 
   const todasLimpias = verificaciones.every((v) => ESTADOS_LIMPIOS.includes(v.estado));
   const badgeAdmin = todasLimpias ? { texto: 'APTO PARA TRASPASO', color: COLOR.BIEN } : { texto: 'CON IMPEDIMENTOS', color: COLOR.MAL };
   dibujarBadge(doc, doc.page.margins.left, doc.y, badgeAdmin.texto, badgeAdmin.color, { fontSize: 11, paddingX: 12, paddingY: 6 });
-  doc.moveDown(1.2);
-
-  doc.table({
-    data: [
-      ['Verificación', 'Detalle', 'Estado'],
-      ...verificaciones.map((v) => [
-        AREA_LABELS[v.area],
-        v.detalle || '—',
-        {
-          text: ESTADO_LABELS[v.estado] || v.estado,
-          textColor: ESTADOS_LIMPIOS.includes(v.estado) ? COLOR.BIEN : v.estado === 'NO_VERIFICADO' ? COLOR.GRIS_TEXTO : COLOR.MAL,
-          font: { family: 'Helvetica-Bold' },
-        },
-      ]),
-    ],
-    rowStyles: (i) => (i === 0 ? { font: { family: 'Helvetica-Bold' }, backgroundColor: '#EEEEEE' } : {}),
-    columnStyles: [{ width: 150 }, { width: '*' }, { width: 100 }],
-    padding: 5,
-  });
-
   doc.moveDown(0.8);
+
+  for (const v of verificaciones) {
+    dibujarBloqueVerificacion(doc, v);
+  }
+
+  doc.moveDown(0.4);
   doc.fontSize(11).font('Helvetica-Bold').fillColor('#1A1A1A').text('Dictamen');
   doc.moveDown(0.3);
 
@@ -343,15 +460,110 @@ function dibujarPagina2(doc, { placa, codigoCertificado, verificaciones, veredic
   doc.fillColor('#000000');
 }
 
-function dibujarSeccionGarantia(doc, { codigoCertificado }) {
-  doc.fontSize(13).font('Helvetica-Bold').fillColor('#1A1A1A').text('Garantía CERTIMOTORS');
+// Checklist completo de los puntos reportados, por categoría, como respaldo
+// visible de la inspección (complementa el veredicto sintetizado de la pág. 1).
+// Marcas: ✓ verde (BIEN, ZapfDingbats), ! naranja (REGULAR), ✗ rojo (MAL).
+function dibujarChecklistCompleto(doc, { hallazgos, categoriaPorPunto }) {
+  doc.fontSize(13).font('Helvetica-Bold').fillColor('#1A1A1A').text('Checklist de la inspección');
+  doc.moveDown(0.2);
+  doc
+    .font('Helvetica')
+    .fontSize(8)
+    .fillColor(COLOR.GRIS_TEXTO)
+    .text(`Detalle punto por punto de los ${hallazgos.length} puntos reportados por el inspector, agrupados por sistema.`);
+  doc.moveDown(0.5);
+
+  const porCategoria = new Map();
+  for (const h of hallazgos) {
+    const categoria = categoriaPorPunto.get(h.punto) || 'OTROS';
+    if (!porCategoria.has(categoria)) porCategoria.set(categoria, []);
+    porCategoria.get(categoria).push(h);
+  }
+
+  const anchoUtil = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+
+  // Marcas vectoriales: los glifos ✓/✗ no existen en las fuentes base de
+  // pdfkit (WinAnsi) y ZapfDingbats mapea a otros símbolos — se dibujan a mano.
+  const dibujarMarca = (estado, x, y) => {
+    doc.save().lineWidth(1.4);
+    if (estado === 'BIEN') {
+      doc.moveTo(x, y + 4).lineTo(x + 2.5, y + 6.5).lineTo(x + 7, y + 0.5).stroke(COLOR.BIEN);
+    } else if (estado === 'MAL') {
+      doc.moveTo(x, y + 1).lineTo(x + 6, y + 7).moveTo(x + 6, y + 1).lineTo(x, y + 7).stroke(COLOR.MAL);
+    } else {
+      doc.restore();
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(COLOR.REGULAR).text('!', x + 2, y - 1.5, { lineBreak: false });
+      return;
+    }
+    doc.restore();
+  };
+
+  for (const categoria of [...Object.keys(CATEGORIA_LABELS), 'OTROS']) {
+    const items = porCategoria.get(categoria);
+    if (!items?.length) continue;
+
+    if (doc.y + 30 > doc.page.height - doc.page.margins.bottom) doc.addPage();
+    doc.save().rect(doc.page.margins.left, doc.y, anchoUtil, 16).fill(COLOR.GRIS_HEADER).restore();
+    doc.fillColor('#1A1A1A').font('Helvetica-Bold').fontSize(9).text(CATEGORIA_LABELS[categoria] || 'Otros', doc.page.margins.left + 4, doc.y + 4);
+    doc.y += 8;
+
+    for (const h of items) {
+      if (doc.y + 12 > doc.page.height - doc.page.margins.bottom) doc.addPage();
+      const y = doc.y;
+      dibujarMarca(h.estado, doc.page.margins.left + 6, y);
+      doc
+        .font('Helvetica')
+        .fontSize(8.5)
+        .fillColor('#333333')
+        .text(`${h.punto} · ${h.nombre_punto || 'N/D'}${h.observacion ? ` — ${h.observacion}` : ''}`, doc.page.margins.left + 22, y, {
+          width: anchoUtil - 22,
+          height: 10,
+          ellipsis: true,
+        });
+      doc.x = doc.page.margins.left;
+      doc.y = y + 11;
+    }
+    doc.moveDown(0.4);
+  }
+  doc.fillColor('#000000').font('Helvetica').fontSize(10);
+  doc.moveDown(0.4);
+}
+
+// El VIN/chasis/motor impresos deben compararse contra el vehículo físico:
+// es la defensa del comprador contra un certificado usado en otro carro.
+function dibujarCajaVerificacionFisica(doc, { orden, placa }) {
+  const xCaja = doc.page.margins.left;
+  const anchoCaja = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const texto =
+    `Antes de cerrar la compra, compará estos datos contra el vehículo físico: placa ${placa}, ` +
+    `chasis/VIN ${orden.chasis || 'no registrado'}, motor ${orden.motor || 'no registrado'}. ` +
+    'Si algún número no coincide con el que ves en el carro, este certificado no aplica a ese vehículo.';
+
+  doc.font('Helvetica').fontSize(9);
+  const alturaTexto = doc.heightOfString(texto, { width: anchoCaja - 16 }) + 16;
+  if (doc.y + alturaTexto + 20 > doc.page.height - doc.page.margins.bottom) doc.addPage();
+  const yCaja = doc.y;
+  doc.save().rect(xCaja, yCaja, anchoCaja, alturaTexto + 14).fillAndStroke('#fffbeb', '#f59e0b').restore();
+  doc.fillColor('#78350f').font('Helvetica-Bold').fontSize(9).text('VERIFICÁ FÍSICAMENTE', xCaja + 8, yCaja + 7);
+  doc.font('Helvetica').text(texto, xCaja + 8, yCaja + 20, { width: anchoCaja - 16 });
+  doc.fillColor('#000000').fontSize(10);
+  doc.x = doc.page.margins.left;
+  doc.y = yCaja + alturaTexto + 24;
+}
+
+function dibujarSeccionGarantia(doc, { codigoCertificado, orden }) {
+  doc.fontSize(13).font('Helvetica-Bold').fillColor('#1A1A1A').text('Garantía y vigencia');
   doc.moveDown(0.3);
+
+  const fechaInspeccion = new Date(orden?.updated_at || orden?.created_at || Date.now());
+  const vence = new Date(fechaInspeccion.getTime() + 90 * 24 * 60 * 60 * 1000);
+  const fmt = (d) => d.toLocaleDateString('es-GT', { dateStyle: 'long', timeZone: 'America/Guatemala' });
 
   const xCaja = doc.page.margins.left;
   const anchoCaja = doc.page.width - doc.page.margins.left - doc.page.margins.right;
   const yCaja = doc.y;
   const texto =
-    `Este certificado tiene una validez de 90 días a partir de la fecha de inspección, bajo el código ${codigoCertificado}. ` +
+    `Certificado ${codigoCertificado} — vigente por 90 días: del ${fmt(fechaInspeccion)} al ${fmt(vence)}. ` +
     'CERTIMOTORS garantiza la objetividad e independencia de la evaluación realizada y la trazabilidad de cada hallazgo ' +
     'registrado durante la inspección de 110 puntos. Conserve este documento como respaldo de la condición del vehículo ' +
     'al momento de la certificación.';
@@ -373,11 +585,17 @@ function dibujarLineaFirma(doc, x, width, etiqueta, nombre) {
   doc.fillColor('#000000').fontSize(10);
 }
 
-async function dibujarPaginaFirmasYQr(doc, { placa, codigoCertificado, orden }) {
+async function dibujarPaginaFirmasYQr(doc, { placa, codigoCertificado, orden, hallazgos, categoriaPorPunto }) {
   dibujarEncabezadoPrincipal(doc, { placa, codigoCertificado });
 
-  dibujarSeccionGarantia(doc, { codigoCertificado });
+  dibujarChecklistCompleto(doc, { hallazgos, categoriaPorPunto });
 
+  dibujarSeccionGarantia(doc, { codigoCertificado, orden });
+
+  dibujarCajaVerificacionFisica(doc, { orden, placa });
+
+  // Firmas y QR van juntos al pie: si no queda espacio, página nueva.
+  if (doc.y + 160 > doc.page.height - doc.page.margins.bottom) doc.addPage();
   doc.fontSize(13).font('Helvetica-Bold').fillColor('#1A1A1A').text('Firmas');
   doc.moveDown(3);
 
@@ -450,6 +668,33 @@ export async function generarCertificado(placa, db) {
   const atencionPorPunto = new Map(atencionInmediata.map((a) => [a.punto, a.descripcion]));
   const observacionPorPunto = new Map(observacionLista.map((o) => [o.punto, o.descripcion]));
 
+  // Fotos del mecánico (best-effort): las más relevantes primero — hallazgos
+  // MAL, luego REGULAR, luego el resto. Si la tabla/bucket no existen todavía
+  // (migración 008 pendiente) o una descarga falla, el PDF sale sin fotos.
+  let fotos = [];
+  try {
+    if (typeof db.obtenerFotosPorPlaca === 'function' && typeof db.descargarFoto === 'function') {
+      const estadoPorPunto = new Map(hallazgos.map((h) => [h.punto, h.estado]));
+      const rango = { MAL: 0, REGULAR: 1 };
+      const filas = (await db.obtenerFotosPorPlaca(placa))
+        .sort((a, b) => (rango[estadoPorPunto.get(a.punto)] ?? 2) - (rango[estadoPorPunto.get(b.punto)] ?? 2))
+        .slice(0, 6);
+      fotos = (
+        await Promise.all(
+          filas.map(async (f) => {
+            try {
+              return { buffer: await db.descargarFoto(f.storage_path), caption: f.caption };
+            } catch {
+              return null;
+            }
+          })
+        )
+      ).filter(Boolean);
+    }
+  } catch (error) {
+    logger.warn('No se pudieron cargar fotos de inspección para el PDF', { placa, error: error.message });
+  }
+
   const criticos = hallazgos.filter((h) => h.estado === 'MAL').length;
   const observaciones = hallazgos.filter((h) => h.estado === 'REGULAR').length;
   const aprobados = hallazgos.filter((h) => h.estado === 'BIEN').length;
@@ -464,6 +709,7 @@ export async function generarCertificado(placa, db) {
     placa,
     codigoCertificado,
     hallazgos,
+    fotos,
     veredicto,
     veredictoBadge,
     categoriaPorPunto,
@@ -480,7 +726,7 @@ export async function generarCertificado(placa, db) {
   }
 
   doc.addPage();
-  await dibujarPaginaFirmasYQr(doc, { placa, codigoCertificado, orden });
+  await dibujarPaginaFirmasYQr(doc, { placa, codigoCertificado, orden, hallazgos, categoriaPorPunto });
 
   const rangoPaginas = doc.bufferedPageRange();
   for (let i = rangoPaginas.start; i < rangoPaginas.start + rangoPaginas.count; i++) {

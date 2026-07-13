@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validatePlaca, validatePhoneNumber, validateMessage, validatePuntoActual } from '../src/validators.js';
+import { validatePlaca, validatePhoneNumber, validateMessage } from '../src/validators.js';
 
 test('validatePlaca: acepta el formato P926FTB', () => {
   assert.doesNotThrow(() => validatePlaca('P926FTB'));
@@ -35,17 +35,4 @@ test('validateMessage: rechaza vacío, solo espacios o no-string', () => {
   assert.throws(() => validateMessage(''), (err) => err.statusCode === 400);
   assert.throws(() => validateMessage('   '), (err) => err.statusCode === 400);
   assert.throws(() => validateMessage(null), (err) => err.statusCode === 400);
-});
-
-test('validatePuntoActual: acepta enteros entre 1 y 110', () => {
-  assert.doesNotThrow(() => validatePuntoActual(1));
-  assert.doesNotThrow(() => validatePuntoActual(110));
-  assert.doesNotThrow(() => validatePuntoActual('55'));
-});
-
-test('validatePuntoActual: rechaza fuera de rango, decimales o no numérico', () => {
-  assert.throws(() => validatePuntoActual(0), (err) => err.statusCode === 400);
-  assert.throws(() => validatePuntoActual(111), (err) => err.statusCode === 400);
-  assert.throws(() => validatePuntoActual(5.5), (err) => err.statusCode === 400);
-  assert.throws(() => validatePuntoActual('abc'), (err) => err.statusCode === 400);
 });

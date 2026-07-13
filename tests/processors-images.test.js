@@ -75,7 +75,12 @@ function crearDbFake(overrides = {}) {
       clientes[numero] = cliente;
       return cliente;
     },
-    obtenerConversacionesPorPlaca: async (placa) => conversaciones.filter((c) => c.placa === placa),
+    obtenerUltimaOrdenPorCliente: async (clienteId) => {
+      const propias = Object.values(ordenes).filter((o) => o.cliente_id === clienteId);
+      return propias[propias.length - 1] || null;
+    },
+    obtenerConversacionesPorCliente: async (clienteId) =>
+      conversaciones.filter((c) => c.cliente_id === clienteId).slice(-6).reverse(),
     guardarConversacion: async (placa, cliente_id, tipo_usuario, mensaje_entrada, respuesta_ia) => {
       const fila = { placa, cliente_id, tipo_usuario, mensaje_entrada, respuesta_ia };
       conversaciones.push(fila);
@@ -164,7 +169,7 @@ test('procesarTelegramMecanico: degradación graceful si falla descarga de image
   );
   process.env.ANTHROPIC_API_URL = url;
 
-  // botToken = undefined → obtenerImagenTelegram retorna null inmediatamente (degradación graceful)
+  // botToken = undefined → la descarga de la imagen falla y el flujo sigue sin ella (degradación graceful)
   const db = crearDbFake();
   await assert.doesNotReject(() =>
     procesarTelegramMecanico(
@@ -179,6 +184,57 @@ test('procesarTelegramMecanico: degradación graceful si falla descarga de image
 
   server.close();
   delete process.env.ANTHROPIC_API_URL;
+});
+
+test('procesarTelegramMecanico: photo[] descargable se sube al bucket y se asocia al hallazgo (PDF v2)', async () => {
+  // Fake de Telegram API: getFile + descarga del archivo.
+  const fakePng = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  const tgServer = http.createServer((req, res) => {
+    if (req.url.includes('/getFile')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, result: { file_path: 'photos/f.png' } }));
+    } else {
+      res.writeHead(200, { 'content-type': 'image/png' });
+      res.end(fakePng);
+    }
+  });
+  await new Promise((r) => tgServer.listen(0, r));
+  process.env.TELEGRAM_API_URL = `http://127.0.0.1:${tgServer.address().port}`;
+
+  const { server, url } = await crearServidorClaudeFake(() =>
+    toolUseResponse('registrar_inspeccion', {
+      hallazgos: [{ punto: 23, nombre_punto: 'Buje superior izquierdo', estado: 'MAL' }],
+      inspeccion_completa: false,
+      respuesta_mecanico: 'Anotado.',
+    })
+  );
+  process.env.ANTHROPIC_API_URL = url;
+
+  const fotosGuardadas = [];
+  const db = crearDbFake();
+  db.asegurarBucketFotos = async () => {};
+  db.subirFotoInspeccion = async (placa, buffer, contentType) => {
+    assert.ok(buffer.equals(fakePng));
+    return `${placa}/foto.png`;
+  };
+  db.guardarFotoInspeccion = async (fila) => fotosGuardadas.push(fila);
+
+  await procesarTelegramMecanico(
+    db,
+    fotoTelegram({ caption: 'placa P926FTB buje roto' }),
+    'fake-token',
+    'fake-key'
+  );
+
+  assert.equal(fotosGuardadas.length, 1);
+  assert.equal(fotosGuardadas[0].placa, 'P926FTB');
+  assert.equal(fotosGuardadas[0].punto, 23);
+  assert.equal(fotosGuardadas[0].caption, 'Buje superior izquierdo');
+
+  tgServer.close();
+  server.close();
+  delete process.env.ANTHROPIC_API_URL;
+  delete process.env.TELEGRAM_API_URL;
 });
 
 test('procesarTelegramTramitador: photo[] con caption que incluye placa se procesa sin error', async () => {
@@ -230,12 +286,33 @@ test('procesarWhatsapp: mensaje con image (sin text) crea cliente y llama a Clau
   delete process.env.WHATSAPP_GRAPH_API_URL;
 });
 
-test('procesarWhatsapp: mensaje sin text ni image retorna sin procesar', async () => {
-  const payloadVacio = {
-    entry: [{ changes: [{ value: { messages: [{ from: '50212345678', type: 'sticker' }] } }] }],
+test('procesarWhatsapp: nota de voz recibe respuesta pidiendo texto', async () => {
+  const enviados = [];
+  const { server, url } = await crearServidorClaudeFake((body) => {
+    if (body.messaging_product) {
+      enviados.push(body);
+      return { ok: true };
+    }
+    assert.ok(
+      JSON.stringify(body.messages).includes('nota de voz'),
+      'el asesor debe saber que llegó una nota de voz'
+    );
+    return textResponse('Recibí tu audio — por el momento trabajo mejor con texto o fotos. ¿Me escribís lo que necesitás?');
+  });
+  process.env.ANTHROPIC_API_URL = url;
+  process.env.WHATSAPP_GRAPH_API_URL = url;
+
+  const payloadAudio = {
+    entry: [{ changes: [{ value: { messages: [{ from: '50212345678', type: 'audio', audio: { id: 'audio-1' } }] } }] }],
   };
 
   const db = crearDbFake();
-  await assert.doesNotReject(() => procesarWhatsapp(db, payloadVacio, 'fake-key'));
-  assert.equal(Object.keys(db._clientes).length, 0, 'no debe crear cliente para tipo sin soporte');
+  await procesarWhatsapp(db, payloadAudio, 'fake-key');
+
+  assert.equal(enviados.length, 1, 'debe responder al cliente');
+  assert.ok(enviados[0].text.body.includes('audio'));
+
+  server.close();
+  delete process.env.ANTHROPIC_API_URL;
+  delete process.env.WHATSAPP_GRAPH_API_URL;
 });

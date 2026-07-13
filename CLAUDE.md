@@ -27,6 +27,22 @@ Plataforma de certificación vehicular en Guatemala. Tres actores:
 - **Mecánico:** usa bot Telegram para registrar 110 puntos de inspección por placa
 - **Tramitador:** usa bot Telegram para gestionar trámites SAT/municipales por placa
 
+### Servicios y precios (Jul 2026)
+- **BÁSICO** (código `BASICO`) — Q550
+- **FULL** (código `FULL`) — Q1,200
+
+### Estados de `ordenes.status`
+```
+SERVICIO_PRESENTADO   → orden creada, esperando elección de servicio
+ESPERANDO_PAGO        → servicio elegido (BASICO o FULL), link de pago enviado
+PAGO_CONFIRMADO       → webhook de Recurrente confirmó el pago
+INSPECCION_COMPLETA   → mecánico reportó los 110 puntos
+TRAMITE_COMPLETO      → tramitador completó el trámite SAT/municipal
+CERTIFICADO_APROBADO  → admin aprobó el certificado PDF
+NECESITA_CORRECCION   → admin rechazó; vuelve al tramitador
+```
+> `ordenes.status` es `VARCHAR(50)`, no enum de Postgres — agregar estados nuevos NO requiere migración.
+
 ### Stack
 - **Runtime:** Node.js ≥18, ES Modules (`"type": "module"`)
 - **Framework:** Express 4.18
@@ -106,6 +122,8 @@ ls *.js 2>/dev/null
 
 ### 1.5 Verificar si migraciones de Supabase están aplicadas
 Preguntar al usuario si las migraciones `init.sql`, `002_costos_api.sql`, `003_cola_jobs.sql` fueron ejecutadas en el dashboard de Supabase. No asumir que sí.
+
+> **Jul 2026:** Migraciones `005_servicio_basico.sql` y `006_conversaciones_sin_placa.sql` ya aplicadas en Supabase ✅
 
 ### 1.6 Reporte de auditoría al usuario
 Antes de modificar NADA, presentar:
@@ -281,7 +299,7 @@ Verificar con el usuario que estas variables están en Render con valores reales
 ```
 WHATSAPP_TOKEN              ✅ subido
 WHATSAPP_PHONE_NUMBER_ID    ✅ 1209535848903480
-WHATSAPP_WEBHOOK_VERIFY_TOKEN ✅ certimotors_whatsapp_2024
+WHATSAPP_WEBHOOK_VERIFY_TOKEN ✅ configurado en Render
 WHATSAPP_BUSINESS_ACCOUNT_ID  → agregar: 1501313747964606
 WHATSAPP_APP_SECRET           → pendiente (obtener en Meta Developers → Config Básica)
 SUPABASE_URL                  → verificar que no sea placeholder
@@ -291,8 +309,11 @@ PUBLIC_URL                    → https://certimotors.onrender.com
 NODE_ENV                      → production
 DATABASE_TYPE                 → supabase
 TELEGRAM_AUTO_REGISTER_WEBHOOK → true (si webhooks no están registrados)
-TELEGRAM_MECANICO_BOT_TOKEN   → 8921768773:AAGF1YseaSC8I6gKCq1O0M5mFgw7vl_Pu-s
-TELEGRAM_TRAMITADOR_BOT_TOKEN → 8877958532:AAHq2gB-0kmZWU8WaaX50d-B7HGRajn9-zQ
+TELEGRAM_MECANICO_BOT_TOKEN   → configurado en Render (tokens viejos rotados; nunca commitear valores)
+TELEGRAM_TRAMITADOR_BOT_TOKEN → configurado en Render (tokens viejos rotados; nunca commitear valores)
+TELEGRAM_ADMIN_CHAT_ID        → agregar (ID numérico del chat admin en Telegram)
+RECURRENTE_SECRET_KEY         → agregar (clave secreta de API de Recurrente)
+RECURRENTE_WEBHOOK_SECRET     → agregar (secreto para verificar webhooks Svix de Recurrente)
 ```
 
 ---
@@ -460,5 +481,6 @@ Fase 10: Mapeo PDF (investigar, no construir)
 
 ---
 
-*Generado para Claude Code — CERTIMOTORS v1.0 — Junio 2026*
+*Generado para Claude Code — CERTIMOTORS v1.0 — Julio 2026*
 *Basado en AUDITORIA_TECNICA.md (21 Jun 2026) + diagnóstico de sesión 29 Jun 2026*
+*Actualizado en bloque 4 (QA/cierre documental) — 5 Jul 2026*

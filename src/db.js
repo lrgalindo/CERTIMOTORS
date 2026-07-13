@@ -1,10 +1,16 @@
 import { createClient } from '@supabase/supabase-js';
 import { v4 as uuidv4 } from 'uuid';
+import { statusTrasFallo } from './queue.js';
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY
-);
+// supabase-js usa fetch, que no tiene timeout: era el único cliente HTTP sin
+// acotar tras el fix de axios (PR #11) y cada job hace varias llamadas a DB.
+// Un fetch colgado dejaba el job en 'procesando' hasta que lo rescatara el reaper.
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY, {
+  global: {
+    fetch: (url, options = {}) =>
+      fetch(url, { ...options, signal: options.signal ?? AbortSignal.timeout(Number(process.env.SUPABASE_TIMEOUT_MS) || 15000) }),
+  },
+});
 
 export async function initDB() {
   try {
@@ -86,15 +92,31 @@ export async function obtenerClientePorId(id) {
   return data;
 }
 
-export async function obtenerConversacionesPorPlaca(placa) {
+// Última orden del cliente — recupera el contexto cuando el mensaje no trae
+// placa (el caso normal: el cliente no repite la placa en cada mensaje).
+export async function obtenerUltimaOrdenPorCliente(clienteId) {
+  const { data, error } = await supabase
+    .from('ordenes')
+    .select('*')
+    .eq('cliente_id', clienteId)
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (error) throw new Error(`Error obteniendo orden del cliente: ${error.message}`);
+  return data?.[0] || null;
+}
+
+// Historial por cliente (no por placa): cubre la conversación pre-placa y
+// mantiene el hilo aunque el cliente tenga más de una orden.
+export async function obtenerConversacionesPorCliente(clienteId, limite = 6) {
   const { data, error } = await supabase
     .from('conversaciones')
     .select('*')
-    .eq('placa', placa)
+    .eq('cliente_id', clienteId)
     .order('created_at', { ascending: false })
-    .limit(10);
+    .limit(limite);
 
-  if (error) throw new Error(`Error fetching conversations: ${error.message}`);
+  if (error) throw new Error(`Error fetching client conversations: ${error.message}`);
   return data || [];
 }
 
@@ -222,22 +244,6 @@ export async function obtenerNotificacionesPorPlaca(placa) {
   return data || [];
 }
 
-export async function obtenerNotificacionesPendientes() {
-  const { data, error } = await supabase
-    .from('notificaciones')
-    .select('*')
-    .eq('enviado', false)
-    .order('created_at', { ascending: true });
-
-  if (error) throw new Error(`Error fetching pending notifications: ${error.message}`);
-  return data || [];
-}
-
-export async function marcarNotificacionEnviada(id) {
-  const { error } = await supabase.from('notificaciones').update({ enviado: true }).eq('id', id);
-  if (error) throw new Error(`Error marking notification as sent: ${error.message}`);
-}
-
 export async function registrarCostoAPI({ rol, modelo, tipoTarea, tokensInput, tokensOutput, tokensCacheCreation = 0, tokensCacheRead = 0, costoUsd, placa = null }) {
   const id = uuidv4();
   const { data: result, error } = await supabase
@@ -347,6 +353,88 @@ export async function obtenerStatsReporte() {
     leads_estancados_24h: estancadasRes.count || 0,
     gasto_dia_usd: Number(gastoHoy.toFixed(4)),
   };
+}
+
+// ─── Estado de conversación (máquina de estados WhatsApp) ────────────────────
+
+export async function actualizarEstadoConversacion(clienteId, estado) {
+  const { error } = await supabase
+    .from('clientes')
+    .update({ estado_conversacion: estado, updated_at: new Date().toISOString() })
+    .eq('id', clienteId);
+  if (error) throw new Error(`Error actualizando estado de conversación: ${error.message}`);
+}
+
+// ─── Fotos de inspección (bucket privado) ────────────────────────────────────
+
+export async function asegurarBucketFotos() {
+  const { data: buckets, error } = await supabase.storage.listBuckets();
+  if (error) throw new Error(`Error listando buckets de Storage: ${error.message}`);
+  if ((buckets || []).some((b) => b.name === 'fotos-inspeccion')) return;
+  const { error: createError } = await supabase.storage.createBucket('fotos-inspeccion', { public: false });
+  if (createError) throw new Error(`Error creando bucket fotos-inspeccion: ${createError.message}`);
+}
+
+export async function subirFotoInspeccion(placa, buffer, contentType = 'image/jpeg') {
+  const extension = contentType.split('/')[1] || 'jpg';
+  const ruta = `${placa}/${uuidv4()}.${extension}`;
+  const { error } = await supabase.storage.from('fotos-inspeccion').upload(ruta, buffer, { contentType });
+  if (error) throw new Error(`Error subiendo foto de inspección: ${error.message}`);
+  return ruta;
+}
+
+export async function guardarFotoInspeccion({ placa, punto = null, caption = null, storagePath }) {
+  const { error } = await supabase
+    .from('fotos_inspeccion')
+    .insert([{ id: uuidv4(), placa, punto, caption, storage_path: storagePath }]);
+  if (error) throw new Error(`Error guardando foto de inspección: ${error.message}`);
+}
+
+export async function obtenerFotosPorPlaca(placa) {
+  const { data, error } = await supabase
+    .from('fotos_inspeccion')
+    .select('*')
+    .eq('placa', placa)
+    .order('created_at', { ascending: true });
+  if (error) throw new Error(`Error obteniendo fotos de inspección: ${error.message}`);
+  return data || [];
+}
+
+export async function descargarFoto(storagePath) {
+  const { data, error } = await supabase.storage.from('fotos-inspeccion').download(storagePath);
+  if (error) throw new Error(`Error descargando foto de inspección: ${error.message}`);
+  return Buffer.from(await data.arrayBuffer());
+}
+
+// ─── Listados de solo lectura para el backoffice ─────────────────────────────
+
+export async function listarOrdenes({ status = null, placa = null, limite = 50 } = {}) {
+  let query = supabase.from('ordenes').select('*').order('created_at', { ascending: false }).limit(limite);
+  if (status) query = query.eq('status', status);
+  if (placa) query = query.eq('placa', placa);
+  const { data, error } = await query;
+  if (error) throw new Error(`Error listando órdenes: ${error.message}`);
+  return data || [];
+}
+
+export async function listarJobs(limite = 50) {
+  const { data, error } = await supabase
+    .from('cola_jobs')
+    .select('id, proveedor, status, intentos, max_intentos, error, created_at, updated_at')
+    .order('created_at', { ascending: false })
+    .limit(limite);
+  if (error) throw new Error(`Error listando jobs: ${error.message}`);
+  return data || [];
+}
+
+export async function listarClientes(limite = 50) {
+  const { data, error } = await supabase
+    .from('clientes')
+    .select('numero_telefono, nombre, created_at')
+    .order('created_at', { ascending: false })
+    .limit(limite);
+  if (error) throw new Error(`Error listando clientes: ${error.message}`);
+  return data || [];
 }
 
 // ── WEB CHECKOUT ─────────────────────────────────────────────────────────────
@@ -463,8 +551,22 @@ export async function marcarJobCompletado(id) {
   if (error) throw new Error(`Error marcando job completado: ${error.message}`);
 }
 
+// Jobs huérfanos: reclamados (status 'procesando') pero nunca resueltos —
+// promesa colgada o proceso caído a mitad de trabajo. El reaper del worker
+// los detecta por antigüedad de updated_at (el RPC de reclamo lo refresca).
+export async function obtenerJobsHuerfanos(umbralMs) {
+  const limite = new Date(Date.now() - umbralMs).toISOString();
+  const { data, error } = await supabase
+    .from('cola_jobs')
+    .select('*')
+    .eq('status', 'procesando')
+    .lt('updated_at', limite);
+  if (error) throw new Error(`Error buscando jobs huérfanos: ${error.message}`);
+  return data || [];
+}
+
 export async function marcarJobFallido(id, { intentos, maxIntentos, error: errorMsg, proximoIntentoEn }) {
-  const status = intentos >= maxIntentos ? 'fallido_permanente' : 'pendiente';
+  const status = statusTrasFallo(intentos, maxIntentos);
   const { error } = await supabase
     .from('cola_jobs')
     .update({
@@ -489,7 +591,8 @@ export default {
   actualizarStatusOrden,
   actualizarDatosOrden,
   guardarCertificado,
-  obtenerConversacionesPorPlaca,
+  obtenerUltimaOrdenPorCliente,
+  obtenerConversacionesPorCliente,
   guardarConversacion,
   guardarRevision,
   obtenerRevisionesPorPlaca,
@@ -499,8 +602,6 @@ export default {
   obtenerNotificacionesPorPlacaYTipos,
   asegurarBucketCertificados,
   subirCertificado,
-  obtenerNotificacionesPendientes,
-  marcarNotificacionEnviada,
   registrarCostoAPI,
   obtenerGastoDesde,
   obtenerEstadisticas,
@@ -508,6 +609,15 @@ export default {
   obtenerPlacaPorToken,
   marcarTokenUsado,
   obtenerStatsReporte,
+  actualizarEstadoConversacion,
+  asegurarBucketFotos,
+  subirFotoInspeccion,
+  guardarFotoInspeccion,
+  obtenerFotosPorPlaca,
+  descargarFoto,
+  listarOrdenes,
+  listarJobs,
+  listarClientes,
   marcarOrdenNotificada,
   marcarMecanicoNotificado,
   marcarTramitadorNotificado,
@@ -515,6 +625,7 @@ export default {
   reclamarJobsPendientes,
   marcarJobCompletado,
   marcarJobFallido,
+  obtenerJobsHuerfanos,
   crearOrdenWeb,
   obtenerOrdenPorId,
   guardarCheckoutIdOrden,
