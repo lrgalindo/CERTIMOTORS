@@ -356,8 +356,6 @@ export async function obtenerStatsReporte() {
 }
 
 // ─── Estado de conversación (máquina de estados WhatsApp) ────────────────────
-// JSONB en clientes: las etapas 0-3 ocurren antes de que exista una orden.
-// Requiere la migración 009.
 
 export async function actualizarEstadoConversacion(clienteId, estado) {
   const { error } = await supabase
@@ -367,9 +365,7 @@ export async function actualizarEstadoConversacion(clienteId, estado) {
   if (error) throw new Error(`Error actualizando estado de conversación: ${error.message}`);
 }
 
-// ─── Fotos de inspección (bucket privado, separado de certificados) ──────────
-// Requiere la migración 008 (tabla fotos_inspeccion). El bucket es privado:
-// las fotos solo se leen desde el backend (service key) al generar el PDF.
+// ─── Fotos de inspección (bucket privado) ────────────────────────────────────
 
 export async function asegurarBucketFotos() {
   const { data: buckets, error } = await supabase.storage.listBuckets();
@@ -439,6 +435,90 @@ export async function listarClientes(limite = 50) {
     .limit(limite);
   if (error) throw new Error(`Error listando clientes: ${error.message}`);
   return data || [];
+}
+
+// ── WEB CHECKOUT ─────────────────────────────────────────────────────────────
+
+export async function crearOrdenWeb(data) {
+  const id = uuidv4();
+  const {
+    placa, cliente_id, servicio,
+    nombre_cliente, email, zona, fecha_preferida,
+    marca, modelo, anio,
+  } = data;
+
+  const { data: result, error } = await supabase
+    .from('ordenes')
+    .insert([{
+      id, placa, cliente_id,
+      tipo_auto: 'RODADO',
+      status: 'PENDIENTE_PAGO',
+      canal_origen: 'web',
+      servicio,
+      nombre_cliente: nombre_cliente || null,
+      email: email || null,
+      zona: zona || null,
+      fecha_preferida: fecha_preferida || null,
+      marca: marca || null,
+      modelo: modelo || null,
+      anio: anio ? parseInt(anio, 10) : null,
+    }])
+    .select();
+
+  if (error) throw new Error(`Error creating web order: ${error.message}`);
+  return result[0];
+}
+
+export async function obtenerOrdenPorId(id) {
+  const { data, error } = await supabase
+    .from('ordenes')
+    .select('*')
+    .eq('id', id)
+    .single();
+  if (error && error.code !== 'PGRST116') throw error;
+  return data;
+}
+
+export async function guardarCheckoutIdOrden(ordenId, checkoutId) {
+  const { error } = await supabase
+    .from('ordenes')
+    .update({ recurrente_checkout_id: checkoutId, updated_at: new Date().toISOString() })
+    .eq('id', ordenId);
+  if (error) throw new Error(`Error saving checkout ID: ${error.message}`);
+}
+
+export async function obtenerOrdenPorCheckoutId(checkoutId) {
+  const { data, error } = await supabase
+    .from('ordenes')
+    .select('*')
+    .eq('recurrente_checkout_id', checkoutId)
+    .single();
+  if (error && error.code !== 'PGRST116') throw error;
+  return data;
+}
+
+export async function marcarOrdenNotificada(ordenId) {
+  const { error } = await supabase
+    .from('ordenes')
+    .update({ notificado_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq('id', ordenId);
+  if (error) throw new Error(`Error marcando orden notificada: ${error.message}`);
+}
+
+export async function marcarMecanicoNotificado(ordenId) {
+  const { error } = await supabase
+    .from('ordenes')
+    .update({ mecanico_notificado_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq('id', ordenId);
+  if (error) throw new Error(`Error marcando mecánico notificado: ${error.message}`);
+}
+
+export async function marcarTramitadorNotificado(ordenId) {
+  const { error } = await supabase
+    .from('ordenes')
+    .update({ tramitador_notificado_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq('id', ordenId);
+  if (error) throw new Error(`Error marcando tramitador notificado: ${error.message}`);
 }
 
 export async function encolarJob(proveedor, externalId, payload) {
@@ -538,9 +618,16 @@ export default {
   listarOrdenes,
   listarJobs,
   listarClientes,
+  marcarOrdenNotificada,
+  marcarMecanicoNotificado,
+  marcarTramitadorNotificado,
   encolarJob,
   reclamarJobsPendientes,
   marcarJobCompletado,
   marcarJobFallido,
   obtenerJobsHuerfanos,
+  crearOrdenWeb,
+  obtenerOrdenPorId,
+  guardarCheckoutIdOrden,
+  obtenerOrdenPorCheckoutId,
 };
