@@ -81,17 +81,22 @@ export async function notificarEquipo(orden, cliente) {
   );
 
   if (orden.servicio === 'FULL') {
-    if (CONFIG.TELEGRAM_TRAMITADOR_CHAT_ID) {
-      await enviarTelegram(
-        CONFIG.TELEGRAM_TRAMITADOR_BOT_TOKEN,
-        CONFIG.TELEGRAM_TRAMITADOR_CHAT_ID,
-        mensajeTramitador(orden, cliente)
-      );
-    } else {
-      logger.warn('Tramitador no notificado: TELEGRAM_TRAMITADOR_CHAT_ID no configurado', {
+    if (!CONFIG.TELEGRAM_TRAMITADOR_CHAT_ID) {
+      // Mecánico ya fue notificado, pero FULL requiere ambos.
+      // notificado_at queda NULL → la orden aparece en reconciliación.
+      // Nota: el mecánico ya recibió el mensaje; si se reintenta manualmente
+      // recibirá un duplicado (aceptable vs perder la notificación del tramitador).
+      logger.warn('FULL incompleto: TELEGRAM_TRAMITADOR_CHAT_ID no configurado — notificado_at quedará NULL', {
         placa: orden.placa,
+        mecanico_notificado: true,
       });
+      return false;
     }
+    await enviarTelegram(
+      CONFIG.TELEGRAM_TRAMITADOR_BOT_TOKEN,
+      CONFIG.TELEGRAM_TRAMITADOR_CHAT_ID,
+      mensajeTramitador(orden, cliente)
+    );
   }
 
   logger.info('Equipo notificado vía Telegram', { placa: orden.placa, servicio: orden.servicio });
