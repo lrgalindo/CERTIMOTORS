@@ -24,8 +24,8 @@ const PROCESADORES = {
     if (!orden) throw new Error(`Orden ${orden_id} no encontrada`);
     if (orden.notificado_at) return; // idempotencia: ya notificado en intento anterior
     const cliente = await db.obtenerClientePorId(orden.cliente_id);
-    await notificarEquipo(orden, cliente);  // lanza si falla → worker reintenta
-    await db.marcarOrdenNotificada(orden_id);
+    const enviado = await notificarEquipo(orden, cliente); // lanza si falla → worker reintenta
+    if (enviado) await db.marcarOrdenNotificada(orden_id); // solo cuando realmente se envió
   },
 };
 
