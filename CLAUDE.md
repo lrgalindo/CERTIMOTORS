@@ -481,6 +481,64 @@ Fase 10: Mapeo PDF (investigar, no construir)
 
 ---
 
+---
+
+## 🚀 SPRINT CHECKOUT WEB — 12–13 Jul 2026 (COMPLETADO)
+
+### Qué se construyó
+
+| Componente | Archivo(s) | Estado |
+|---|---|---|
+| Endpoints checkout (`POST /api/ordenes`, `POST /api/pagos/crear-checkout`) | `src/index.js` | ✅ en producción |
+| Webhook Recurrente con verificación HMAC-SHA256 Svix | `src/index.js`, `src/webhook-security.js` | ✅ |
+| CORS restringido a `certimotors.com` para endpoints checkout | `src/index.js` | ✅ |
+| Rate limiting diferenciado: checkout 20 req/15min, general 100/15min | `src/index.js` | ✅ verificado con curl (HTTP 429 en req 21) |
+| Notificaciones idempotentes por destinatario (`mecanico_notificado_at` + `tramitador_notificado_at`) | `src/notificaciones.js`, `src/worker.js`, `src/db.js` | ✅ T007FUL aprobado |
+| Migración 006 (columnas per-recipient) | `migrations/006_per_recipient_notification.sql` | ✅ aplicada en Supabase |
+| Merge con origin/main: procesarLote, reaper huérfanos, pdf-approval, backoffice | múltiples | ✅ |
+| Precios actualizados en prompts (Q300/Q550/Q800) | `src/prompts.js` | ✅ |
+
+### Servicios y precios (Jul 2026, ACTUALIZADOS)
+- **SCANNER** (código `SCANNER`) — Q300: escaneo electrónico OBD-II + reporte códigos de error
+- **ESTÁNDAR** (código `ESTANDAR`) — Q550: inspección completa 110 puntos + certificado PDF
+- **FULL** (código `FULL`) — Q800: ESTÁNDAR + verificación legal (impuesto circulación, calcomanía, multas, gravámenes)
+
+> ⚠️ El CLAUDE.md anterior listaba BÁSICO/FULL con precios Q550/Q1200 — esos precios están desactualizados. Los correctos son los de arriba.
+
+### Tokens de Telegram post-sprint (estado al 13 Jul 2026)
+
+- `TELEGRAM_MECANICO_BOT_TOKEN` → `@certimotors_mecanico_bot` (ID 8921768773) — válido ✅
+- `TELEGRAM_TRAMITADOR_BOT_TOKEN` → mismo token que mecánico (duplicado **intencional** hasta obtener bot real)
+- `TELEGRAM_MECANICO_CHAT_ID` → chat real del mecánico
+- `TELEGRAM_TRAMITADOR_CHAT_ID` → 8289807493 (chat de Rodrigo, **placeholder** hasta tener el chat_id real del tramitador)
+
+### Bug conocido: webhook Telegram del mecánico apunta a endpoint tramitador
+
+**Causa:** Ambos tokens son el mismo bot. `TELEGRAM_AUTO_REGISTER_WEBHOOK=true` en Render llama a `setWebhook` primero con URL `/mecanico`, luego con URL `/tramitador`. La segunda llamada sobreescribe la primera → mensajes entrantes del mecánico llegan al procesador del tramitador.
+
+**Impacto:** Notificaciones **salientes** (checkout web) ✅ no afectadas. Conversaciones **entrantes** del mecánico ❌ rotas.
+
+**Fix definitivo:** Obtener token real y separado para el bot tramitador → poner en `TELEGRAM_TRAMITADOR_BOT_TOKEN` de Render. Después de eso, los dos `setWebhook` registran bots distintos sin conflicto.
+
+**Workaround temporal:** Mientras haya un solo token, desactivar `TELEGRAM_AUTO_REGISTER_WEBHOOK` en Render y registrar solo el webhook del mecánico manualmente vía BotFather o llamada directa a la API.
+
+### Pendientes para próxima sesión
+
+1. **Token real tramitador** — obtener de BotFather, crear bot nuevo separado. Actualizar `TELEGRAM_TRAMITADOR_BOT_TOKEN` y `TELEGRAM_TRAMITADOR_CHAT_ID` en Render.
+2. **Chat ID real tramitador** — la persona que tramita necesita iniciar conversación con el bot tramitador y extraer su chat_id. Hoy es 8289807493 (Rodrigo).
+3. **Limpieza de órdenes de prueba en Supabase** — T001CFG through T007FUL y Q001QAA–Q003QAC. Mostrar SQL exacto antes de ejecutar.
+4. **Frontend web** (`certimotors-web` repo, rama `redesign/v2-home`) — formulario de checkout, flujo de pago. No iniciado.
+5. **SEO/Google** (spec Section 13) — GA4, Search Console, sitemap.xml, robots.txt, meta tags, schema.org, NAP.
+6. **CLAUDE.md** de `certimotors-web` — crear equivalente para ese repo.
+7. **PR #16 hotfix** — merge pendiente de aprobación (fix SyntaxError que impedía deploy del código de checkout).
+
+### Hotfix PR #16 (merge pendiente)
+
+Luego del merge de PR #15, quedaron en `main` dos artefactos del merge que causaban `SyntaxError` al arrancar (`import axios` duplicado, `verificarFirmaRecurrente` duplicado, handler `/webhook/recurrente` duplicado). Render mantuvo el build anterior. El PR #16 (`hotfix/merge-artifacts-jul13`) corrige esto — mergear para que el código de checkout llegue realmente a producción.
+
+---
+
 *Generado para Claude Code — CERTIMOTORS v1.0 — Julio 2026*
 *Basado en AUDITORIA_TECNICA.md (21 Jun 2026) + diagnóstico de sesión 29 Jun 2026*
 *Actualizado en bloque 4 (QA/cierre documental) — 5 Jul 2026*
+*Actualizado tras sprint checkout web — 13 Jul 2026*
