@@ -2,7 +2,7 @@ import * as db from './db.js';
 import { logger } from './logger.js';
 import { procesarWhatsapp, procesarTelegramMecanico, procesarTelegramTramitador } from './processors.js';
 import { procesarCallbackAdmin } from './pdf-approval.js';
-import { notificarEquipo } from './notificaciones.js';
+import { enviarAlMecanico, enviarAlTramitador } from './notificaciones.js';
 import { QUEUE_CONCURRENCY, QUEUE_POLL_INTERVAL_MS, calcularProximoIntento } from './queue.js';
 
 const CONFIG = {
@@ -22,10 +22,33 @@ const PROCESADORES = {
   notificar_equipo: async ({ orden_id }) => {
     const orden = await db.obtenerOrdenPorId(orden_id);
     if (!orden) throw new Error(`Orden ${orden_id} no encontrada`);
-    if (orden.notificado_at) return; // idempotencia: ya notificado en intento anterior
+    if (orden.notificado_at) return; // guard para órdenes ya completamente notificadas
+
+    const mecanicoHecho = !!orden.mecanico_notificado_at;
+    const tramitadorHecho = orden.servicio !== 'FULL' || !!orden.tramitador_notificado_at;
+    if (mecanicoHecho && tramitadorHecho) return; // todos los destinatarios marcados (race condition muy improbable)
+
     const cliente = await db.obtenerClientePorId(orden.cliente_id);
-    const enviado = await notificarEquipo(orden, cliente); // lanza si falla → worker reintenta
-    if (enviado) await db.marcarOrdenNotificada(orden_id); // solo cuando realmente se envió
+
+    if (!mecanicoHecho) {
+      const enviado = await enviarAlMecanico(orden, cliente); // lanza si falla API → worker reintenta
+      if (!enviado) return; // config faltante → job completado, notificado_at queda NULL
+      await db.marcarMecanicoNotificado(orden_id);
+    }
+
+    if (orden.servicio === 'FULL' && !tramitadorHecho) {
+      const enviado = await enviarAlTramitador(orden, cliente); // lanza si falla API → worker reintenta
+      if (!enviado) {
+        logger.warn('FULL incompleto: tramitador sin config — notificado_at quedará NULL', {
+          placa: orden.placa,
+          mecanico_notificado: true,
+        });
+        return;
+      }
+      await db.marcarTramitadorNotificado(orden_id);
+    }
+
+    await db.marcarOrdenNotificada(orden_id);
   },
 };
 

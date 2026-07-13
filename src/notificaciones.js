@@ -58,47 +58,31 @@ async function enviarTelegram(botToken, chatId, texto) {
   });
 }
 
-// Notifica al mecánico y (si FULL y chat_id configurado) al tramitador.
-//
-// Retorna true si el mecánico fue notificado (al menos) — el caller solo debe
-// llamar a marcarOrdenNotificada cuando esto sea true.
-// Retorna false si falta config del mecánico — el caller NO debe marcar
-// notificado_at; la orden quedará visible en la query de reconciliación.
-// Lanza si el envío falla por red/API — el worker reintentará con backoff.
-export async function notificarEquipo(orden, cliente) {
+// Cada función retorna true si el mensaje fue enviado, false si falta config,
+// y lanza si la API falla — el worker reintentará con backoff solo lo que falló.
+
+export async function enviarAlMecanico(orden, cliente) {
   if (!CONFIG.TELEGRAM_MECANICO_BOT_TOKEN || !CONFIG.TELEGRAM_MECANICO_CHAT_ID) {
-    logger.warn('Notificación omitida: TELEGRAM_MECANICO_* no configurado (config faltante, no error de red)', {
-      placa: orden.placa,
-      servicio: orden.servicio,
-    });
+    logger.warn('Notificación mecánico omitida: config faltante', { placa: orden.placa, servicio: orden.servicio });
     return false;
   }
-
   await enviarTelegram(
     CONFIG.TELEGRAM_MECANICO_BOT_TOKEN,
     CONFIG.TELEGRAM_MECANICO_CHAT_ID,
     mensajeMecanico(orden, cliente)
   );
+  return true;
+}
 
-  if (orden.servicio === 'FULL') {
-    if (!CONFIG.TELEGRAM_TRAMITADOR_CHAT_ID) {
-      // Mecánico ya fue notificado, pero FULL requiere ambos.
-      // notificado_at queda NULL → la orden aparece en reconciliación.
-      // Nota: el mecánico ya recibió el mensaje; si se reintenta manualmente
-      // recibirá un duplicado (aceptable vs perder la notificación del tramitador).
-      logger.warn('FULL incompleto: TELEGRAM_TRAMITADOR_CHAT_ID no configurado — notificado_at quedará NULL', {
-        placa: orden.placa,
-        mecanico_notificado: true,
-      });
-      return false;
-    }
-    await enviarTelegram(
-      CONFIG.TELEGRAM_TRAMITADOR_BOT_TOKEN,
-      CONFIG.TELEGRAM_TRAMITADOR_CHAT_ID,
-      mensajeTramitador(orden, cliente)
-    );
+export async function enviarAlTramitador(orden, cliente) {
+  if (!CONFIG.TELEGRAM_TRAMITADOR_BOT_TOKEN || !CONFIG.TELEGRAM_TRAMITADOR_CHAT_ID) {
+    logger.warn('Notificación tramitador omitida: config faltante', { placa: orden.placa });
+    return false;
   }
-
-  logger.info('Equipo notificado vía Telegram', { placa: orden.placa, servicio: orden.servicio });
+  await enviarTelegram(
+    CONFIG.TELEGRAM_TRAMITADOR_BOT_TOKEN,
+    CONFIG.TELEGRAM_TRAMITADOR_CHAT_ID,
+    mensajeTramitador(orden, cliente)
+  );
   return true;
 }

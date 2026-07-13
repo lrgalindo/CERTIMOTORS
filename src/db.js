@@ -417,6 +417,22 @@ export async function marcarOrdenNotificada(ordenId) {
   if (error) throw new Error(`Error marcando orden notificada: ${error.message}`);
 }
 
+export async function marcarMecanicoNotificado(ordenId) {
+  const { error } = await supabase
+    .from('ordenes')
+    .update({ mecanico_notificado_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq('id', ordenId);
+  if (error) throw new Error(`Error marcando mecánico notificado: ${error.message}`);
+}
+
+export async function marcarTramitadorNotificado(ordenId) {
+  const { error } = await supabase
+    .from('ordenes')
+    .update({ tramitador_notificado_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq('id', ordenId);
+  if (error) throw new Error(`Error marcando tramitador notificado: ${error.message}`);
+}
+
 export async function encolarJob(proveedor, externalId, payload) {
   const id = uuidv4();
   const { data: result, error } = await supabase
@@ -493,6 +509,8 @@ export default {
   marcarTokenUsado,
   obtenerStatsReporte,
   marcarOrdenNotificada,
+  marcarMecanicoNotificado,
+  marcarTramitadorNotificado,
   encolarJob,
   reclamarJobsPendientes,
   marcarJobCompletado,
