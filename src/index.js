@@ -1,4 +1,5 @@
 import 'dotenv/config.js';
+import path from 'node:path';
 import axios from 'axios';
 import express from 'express';
 import compression from 'compression';
@@ -447,6 +448,15 @@ app.post('/webhook/recurrente', async (req, res) => {
 });
 
 app.use('/backoffice', crearBackofficeRouter(db));
+
+app.get('/api/certificados/muestra/:tier', (req, res) => {
+  const { tier } = req.params;
+  if (tier !== 'basico' && tier !== 'full') {
+    return res.status(400).json({ error: 'tier debe ser "basico" o "full"' });
+  }
+  const archivo = path.join(process.cwd(), 'muestras-pdf', `certificado-${tier}-muestra.pdf`);
+  res.sendFile(archivo, { headers: { 'Content-Disposition': `inline; filename="certificado-${tier}-muestra.pdf"` } });
+});
 
 app.use((req, res) => {
   handleError(new AppError('Ruta no encontrada', 404), res);
