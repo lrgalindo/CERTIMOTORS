@@ -51,6 +51,7 @@ const orden = {
   cilindros:        '8',
   cc:               '3000',
   asientos:         '7',
+  contratante:      'Barbara Medei',
 };
 const placa             = 'P0-769BQQ';
 const codigoCertificado = 'CM-ECONOLINE-CARLOS26';
@@ -305,14 +306,15 @@ function dibujarEncabezadoPrincipal(doc, { placa, codigoCertificado }) {
 
 function dibujarTablaVehiculo(doc, { orden, placa, codigoCertificado }) {
   const filas = [
-    ['TIPO',         orden.tipo_auto || 'No disponible',  'COLOR',        orden.color || 'No disponible'],
-    ['No. CHASIS',   orden.chasis   || 'No disponible',   'No. MOTOR',    orden.motor || 'No disponible'],
-    ['MARCA',        orden.marca    || 'No disponible',   'PLACA',        placa],
-    ['LÍNEA/MODELO', orden.modelo   || 'No disponible',   'AÑO',          orden.anio  || 'No disponible'],
-    ['INSPECTOR',    orden.inspector_nombre || 'N/D',     'FECHA',        formatearFechaHora(new Date(orden.updated_at))],
-    ['KM / MILLAS',  orden.kilometraje || 'N/D',          'CÓDIGO CERT',  codigoCertificado],
-    ['PROPIETARIO',  orden.propietario || 'N/D',          'NIT',          orden.nit || 'N/D'],
-    ['CUI',          orden.cui || 'N/D',                  'CILINDROS / CC', `${orden.cilindros || 'N/D'} cil · ${orden.cc || 'N/D'} cc`],
+    ['TIPO',          orden.tipo_auto || 'No disponible', 'COLOR',          orden.color || 'No disponible'],
+    ['No. CHASIS',    orden.chasis   || 'No disponible',  'No. MOTOR',      orden.motor || 'No disponible'],
+    ['MARCA',         orden.marca    || 'No disponible',  'PLACA',          placa],
+    ['LÍNEA/MODELO',  orden.modelo   || 'No disponible',  'AÑO',            orden.anio  || 'No disponible'],
+    ['PROPIETARIO',   orden.propietario || 'N/D',         'NIT',            orden.nit || 'N/D'],
+    ['CONTRATANTE',   orden.contratante || 'N/D',         'CÉDULA/CUI',     orden.cui || 'N/D'],
+    ['KM / MILLAS',   orden.kilometraje || 'N/D',         'CILINDROS / CC', `${orden.cilindros || 'N/D'} cil · ${orden.cc || 'N/D'} cc`],
+    ['INSPECTOR',     orden.inspector_nombre || 'N/D',    'FECHA',          formatearFechaHora(new Date(orden.updated_at))],
+    ['CÓDIGO CERT',   codigoCertificado,                  'ASIENTOS',       `${orden.asientos || 'N/D'}`],
   ];
   drawTable(doc, {
     hideHeader: true,
@@ -328,17 +330,17 @@ function dibujarTablaVehiculo(doc, { orden, placa, codigoCertificado }) {
 function dibujarVeredicto(doc, { veredicto, veredictoBadge }) {
   const centro = doc.page.width / 2;
   dibujarBadge(doc, 0, doc.y, `VEREDICTO: ${veredictoBadge.texto}`, veredictoBadge.color, { fontSize: 13, paddingX: 14, paddingY: 7, centerIn: centro });
-  doc.moveDown(0.8);
-  doc.fontSize(10).font('Helvetica').fillColor('#222222')
+  doc.moveDown(0.4);
+  doc.fontSize(9).font('Helvetica').fillColor('#222222')
     .text(veredicto, { width: doc.page.width - doc.page.margins.left - doc.page.margins.right });
-  doc.moveDown(0.8);
+  doc.moveDown(0.4);
 }
 
 function dibujarResumenBoxes(doc, { criticos, observaciones, aprobados }) {
   const espacio    = 12;
   const anchoTotal = doc.page.width - doc.page.margins.left - doc.page.margins.right;
   const boxWidth   = (anchoTotal - espacio * 2) / 3;
-  const boxHeight  = 58;
+  const boxHeight  = 48;
   const y = doc.y;
   const items = [
     { label: 'CRÍTICOS',       valor: criticos,     color: COLOR.MAL,     bg: BG_SUAVE.MAL },
@@ -348,12 +350,12 @@ function dibujarResumenBoxes(doc, { criticos, observaciones, aprobados }) {
   items.forEach((item, i) => {
     const x = doc.page.margins.left + i * (boxWidth + espacio);
     doc.save().rect(x, y, boxWidth, boxHeight).fill(item.bg).restore();
-    doc.fillColor(item.color).font('Helvetica-Bold').fontSize(24).text(String(item.valor), x, y + 8, { width: boxWidth, align: 'center' });
-    doc.fillColor('#444444').font('Helvetica').fontSize(8).text(item.label, x, y + 38, { width: boxWidth, align: 'center' });
+    doc.fillColor(item.color).font('Helvetica-Bold').fontSize(20).text(String(item.valor), x, y + 6, { width: boxWidth, align: 'center' });
+    doc.fillColor('#444444').font('Helvetica').fontSize(8).text(item.label, x, y + 30, { width: boxWidth, align: 'center' });
   });
   doc.fillColor('#000000').font('Helvetica').fontSize(10);
   doc.x = doc.page.margins.left;
-  doc.y = y + boxHeight + 18;
+  doc.y = y + boxHeight + 10;
 }
 
 function dibujarTablaHallazgos(doc, { hallazgos, categoriaPorPunto, atencionPorPunto, observacionPorPunto }) {
@@ -376,11 +378,11 @@ function dibujarTablaHallazgos(doc, { hallazgos, categoriaPorPunto, atencionPorP
     const bienCount  = items.filter((h) => h.estado === 'BIEN').length;
 
     doc.save()
-      .rect(doc.page.margins.left, doc.y, doc.page.width - doc.page.margins.left - doc.page.margins.right, 18)
+      .rect(doc.page.margins.left, doc.y, doc.page.width - doc.page.margins.left - doc.page.margins.right, 16)
       .fill(COLOR.GRIS_HEADER).restore();
-    doc.fillColor('#1A1A1A').font('Helvetica-Bold').fontSize(10)
-      .text(CATEGORIA_LABELS[cat] || 'Otros hallazgos', doc.page.margins.left + 4, doc.y + 4);
-    doc.y += 14;
+    doc.fillColor('#1A1A1A').font('Helvetica-Bold').fontSize(9)
+      .text(CATEGORIA_LABELS[cat] || 'Otros hallazgos', doc.page.margins.left + 4, doc.y + 3);
+    doc.y += 12;
     doc.fillColor('#000000').font('Helvetica').fontSize(10);
 
     if (malRegular.length > 0) {
@@ -398,24 +400,24 @@ function dibujarTablaHallazgos(doc, { hallazgos, categoriaPorPunto, atencionPorP
       doc.fontSize(9).fillColor(COLOR.GRIS_TEXTO)
         .text(`+ ${bienCount} ${bienCount === 1 ? 'pto' : 'ptos'} en BIEN estado`);
     }
-    doc.moveDown(0.5);
+    doc.moveDown(0.3);
     doc.fontSize(10).font('Helvetica').fillColor('#000000');
   }
 }
 
 function dibujarSeccionAdministrativa(doc, { adminChecks, veredictoAdministrativo }) {
-  doc.fontSize(13).font('Helvetica-Bold').fillColor('#1A1A1A').text('Verificación administrativa – Traspaso');
-  doc.moveDown(0.3);
+  doc.fontSize(11).font('Helvetica-Bold').fillColor('#1A1A1A').text('Verificación administrativa – Traspaso');
+  doc.moveDown(0.2);
 
   const estadoColor = {
-    'SOLVENTE': COLOR.BIEN,
-    'VIGENTE':  COLOR.BIEN,
+    'SOLVENTE':            COLOR.BIEN,
+    'VIGENTE':             COLOR.BIEN,
     'PENDIENTE VERIFICAR': COLOR.REGULAR,
   };
 
   drawTable(doc, {
     headers: ['VERIFICACIÓN', 'ESTADO', 'DETALLE'],
-    colWidths: [140, 110, '*'],
+    colWidths: [145, 115, '*'],
     rows: adminChecks.map((c) => [
       { text: c.area, bold: true },
       { text: c.estado, color: estadoColor[c.estado] || COLOR.GRIS_TEXTO, bold: true },
@@ -423,10 +425,10 @@ function dibujarSeccionAdministrativa(doc, { adminChecks, veredictoAdministrativ
     ]),
   });
 
-  doc.moveDown(0.5);
-  doc.fontSize(9).font('Helvetica').fillColor(COLOR.GRIS_TEXTO)
+  doc.moveDown(0.3);
+  doc.fontSize(8).font('Helvetica').fillColor(COLOR.GRIS_TEXTO)
     .text(veredictoAdministrativo, { width: doc.page.width - doc.page.margins.left - doc.page.margins.right });
-  doc.fillColor('#000000').fontSize(10).moveDown(0.8);
+  doc.fillColor('#000000').fontSize(10).moveDown(0.6);
 }
 
 function dibujarLineaFirma(doc, x, width, etiqueta, nombre) {
@@ -437,22 +439,24 @@ function dibujarLineaFirma(doc, x, width, etiqueta, nombre) {
   doc.fillColor('#000000').fontSize(10);
 }
 
-async function dibujarPaginaFirmasYQr(doc, { placa, codigoCertificado, orden }) {
+async function dibujarPaginaFirmasYQr(doc, { placa, codigoCertificado, orden, adminChecks, veredictoAdministrativo }) {
   dibujarEncabezadoPrincipal(doc, { placa, codigoCertificado });
 
-  doc.fontSize(13).font('Helvetica-Bold').fillColor('#1A1A1A').text('Firmas y confirmación');
-  doc.moveDown(3);
+  dibujarSeccionAdministrativa(doc, { adminChecks, veredictoAdministrativo });
+
+  doc.fontSize(11).font('Helvetica-Bold').fillColor('#1A1A1A').text('Firmas y confirmación');
+  doc.moveDown(2);
 
   const anchoTotal = doc.page.width - doc.page.margins.left - doc.page.margins.right;
   const espacio    = 20;
   const anchoCol   = (anchoTotal - espacio * 2) / 3;
   const yFirma     = doc.y;
 
-  dibujarLineaFirma(doc, doc.page.margins.left,                            anchoCol, 'Inspector Técnico',    orden.inspector_nombre);
+  dibujarLineaFirma(doc, doc.page.margins.left,                            anchoCol, 'Inspector Técnico',     orden.inspector_nombre);
   doc.y = yFirma;
-  dibujarLineaFirma(doc, doc.page.margins.left + anchoCol + espacio,       anchoCol, 'Director Técnico',     null);
+  dibujarLineaFirma(doc, doc.page.margins.left + anchoCol + espacio,       anchoCol, 'Director Técnico',      null);
   doc.y = yFirma;
-  dibujarLineaFirma(doc, doc.page.margins.left + 2 * (anchoCol + espacio), anchoCol, 'Cliente / Propietario', orden.propietario);
+  dibujarLineaFirma(doc, doc.page.margins.left + 2 * (anchoCol + espacio), anchoCol, `Contratante: ${orden.contratante || 'Cliente'}`, null);
 
   const url   = `https://certimotors.gt/verificar/${codigoCertificado}`;
   const qrBuf = await QRCode.toBuffer(url, { width: 240, margin: 1 });
@@ -491,9 +495,6 @@ async function generar() {
   dibujarTablaHallazgos(doc, datos);
 
   doc.addPage();
-  dibujarSeccionAdministrativa(doc, datos);
-
-  doc.addPage();
   await dibujarPaginaFirmasYQr(doc, datos);
 
   const rango = doc.bufferedPageRange();
@@ -510,7 +511,7 @@ async function generar() {
     doc.end();
   });
 
-  const outPath = path.join(__dirname, `castillo_orellana_econoline1994_${codigoCertificado}.pdf`);
+  const outPath = path.join(__dirname, `castillo_orellana_ford_econoline_1994_${codigoCertificado}.pdf`);
   fs.writeFileSync(outPath, buffer);
   console.log('PDF generado:', outPath);
 }
