@@ -206,16 +206,17 @@ const veredicto =
 
 // Verificación administrativa
 const adminChecks = [
-  { area: 'IMPUESTO DE CIRCULACIÓN', estado: 'SOLVENTE',             detalle: 'SAT confirma sin incumplimientos al 23/09/2026 — NIT 112817351' },
-  { area: 'CALCOMANÍA / TARJETA',    estado: 'VIGENTE',              detalle: 'Tarjeta de circulación válida hasta 31/07/2027 · No. 947790' },
-  { area: 'MULTAS DE TRÁNSITO',      estado: 'PENDIENTE VERIFICAR',  detalle: 'No se pudo consultar en línea durante la inspección — verificar en portal SAT' },
-  { area: 'GRAVÁMENES / GARANTÍAS',  estado: 'PENDIENTE VERIFICAR',  detalle: 'Requiere consulta en Registro General de la Propiedad o SAT' },
+  { area: 'IMPUESTO DE CIRCULACIÓN', estado: 'SOLVENTE',      detalle: 'SAT confirma sin incumplimientos al 23/09/2026 — NIT 112817351' },
+  { area: 'CALCOMANÍA / TARJETA',    estado: 'VIGENTE',       detalle: 'Tarjeta de circulación vigente hasta 31/07/2027 · No. 947790' },
+  { area: 'MULTAS DE TRÁNSITO',      estado: 'SIN MULTAS',   detalle: 'Verificado en: Ciudad Guatemala, Mixco, Villa Nueva, Sta. Catarina Pinula, Antigua, Amatitlán, San Lucas Sacatepéquez, Escuintla, Palencia, Jutiapa — sin registros' },
+  { area: 'GRAVÁMENES / GARANTÍAS',  estado: 'SIN GRAVÁMENES', detalle: 'Sin gravámenes ni garantías mobiliarias registradas — apto para traspaso' },
 ];
 
 const veredictoAdministrativo =
-  'Impuesto de circulación: SOLVENTE (SAT sin incumplimientos al 23/09/2026). Tarjeta vigente hasta 31/07/2027. ' +
-  'Las multas de tránsito y gravámenes de garantías mobiliarias no pudieron verificarse en línea durante esta inspección — ' +
-  'el propietario debe confirmar mediante consulta manual en el portal SAT antes del traspaso.';
+  'El vehículo se encuentra LIBRE DE IMPEDIMENTOS para traspaso: impuesto de circulación solvente (SAT, 23/09/2026), ' +
+  'tarjeta de circulación vigente hasta 31/07/2027, sin multas de tránsito en 10 municipalidades consultadas ' +
+  '(Ciudad Guatemala, Mixco, Villa Nueva, Sta. Catarina Pinula, Antigua, Amatitlán, San Lucas Sacatepéquez, Escuintla, Palencia, Jutiapa), ' +
+  'y sin gravámenes ni garantías mobiliarias registradas.';
 
 function formatearFechaHora(fecha = new Date()) {
   return fecha.toLocaleString('es-GT', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Guatemala' });
@@ -412,12 +413,14 @@ function dibujarSeccionAdministrativa(doc, { adminChecks, veredictoAdministrativ
   const estadoColor = {
     'SOLVENTE':            COLOR.BIEN,
     'VIGENTE':             COLOR.BIEN,
+    'SIN MULTAS':          COLOR.BIEN,
+    'SIN GRAVÁMENES':      COLOR.BIEN,
     'PENDIENTE VERIFICAR': COLOR.REGULAR,
   };
 
   drawTable(doc, {
     headers: ['VERIFICACIÓN', 'ESTADO', 'DETALLE'],
-    colWidths: [145, 115, '*'],
+    colWidths: [145, 120, '*'],
     rows: adminChecks.map((c) => [
       { text: c.area, bold: true },
       { text: c.estado, color: estadoColor[c.estado] || COLOR.GRIS_TEXTO, bold: true },
@@ -425,10 +428,23 @@ function dibujarSeccionAdministrativa(doc, { adminChecks, veredictoAdministrativ
     ]),
   });
 
+  doc.moveDown(0.4);
+
+  // Badge de resultado administrativo
+  const allGreen = adminChecks.every((c) => estadoColor[c.estado] === COLOR.BIEN);
+  const badgeTexto = allGreen
+    ? 'VEHICULO LIBRE DE IMPEDIMENTOS — APTO PARA TRASPASO'
+    : 'VERIFICACIONES PENDIENTES — REVISAR ANTES DE TRASPASO';
+  const w = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  doc.save().rect(doc.page.margins.left, doc.y, w, 22).fill(allGreen ? '#dcfce7' : '#fef3c7').restore();
+  doc.fontSize(10).font('Helvetica-Bold').fillColor(allGreen ? COLOR.BIEN : COLOR.REGULAR)
+    .text(badgeTexto, doc.page.margins.left + 6, doc.y + 5, { width: w - 12 });
+  doc.y += 26;
+
   doc.moveDown(0.3);
   doc.fontSize(8).font('Helvetica').fillColor(COLOR.GRIS_TEXTO)
-    .text(veredictoAdministrativo, { width: doc.page.width - doc.page.margins.left - doc.page.margins.right });
-  doc.fillColor('#000000').fontSize(10).moveDown(0.6);
+    .text(veredictoAdministrativo, { width: w });
+  doc.fillColor('#000000').fontSize(10).moveDown(0.8);
 }
 
 function dibujarLineaFirma(doc, x, width, etiqueta, nombre) {
